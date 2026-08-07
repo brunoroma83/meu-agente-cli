@@ -1,0 +1,24 @@
+[project]
+name = "meu-agente-cli"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Bruno Roma", email = "bruuno@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "croniter>=6.2.4",
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
+    "psycopg[binary]>=3.3.4",
+    "rich>=15.0.0",
+    "yfinance>=1.5.2",
+]
+
+[project.scripts]
+meu-agente-cli = "meu_agente_cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
