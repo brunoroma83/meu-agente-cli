@@ -116,8 +116,9 @@ def process_agent_turn(user_input: str, console: Console) -> None:
     """
     model = db.get_setting("active_model", "google/gemma-4-31b-qat")
     
-    # Carrega histórico recente
-    history = db.get_chat_history(limit=15)
+    # Carrega histórico recente usando o limite configurado (padrão: 4)
+    history_limit = db.get_chat_history_limit()
+    history = db.get_chat_history(limit=history_limit)
     
     # Monta a estrutura de mensagens para o LLM
     messages = []

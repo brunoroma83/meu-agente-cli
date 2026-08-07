@@ -259,6 +259,20 @@ def set_setting(key: str, value: str) -> bool:
         print(f"[ERROR] Erro ao salvar configuração {key}: {e}", file=sys.stderr)
         return False
 
+def get_chat_history_limit() -> int:
+    """Retorna o limite configurado de mensagens de histórico para enviar ao LLM. Padrão: 4."""
+    val = get_setting("chat_history_limit", "4")
+    try:
+        return int(val)
+    except ValueError:
+        return 4
+
+def set_chat_history_limit(limit: int) -> bool:
+    """Configura o limite de mensagens de histórico para enviar ao LLM."""
+    if limit < 1:
+        return False
+    return set_setting("chat_history_limit", str(limit))
+
 # 2. Histórico de Conversa (Chat History)
 def save_chat_message(sender: str, message: str) -> bool:
     """Salva uma mensagem do histórico no banco de dados."""

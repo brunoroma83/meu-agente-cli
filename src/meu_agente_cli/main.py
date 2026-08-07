@@ -153,6 +153,7 @@ def handle_slash_command(cmd_input: str) -> bool:
             "- [green]/help[/green]: Mostra esta lista de ajuda.\n"
             "- [green]/status[/green]: Mostra conexões e estado atual de segurança.\n"
             "- [green]/clear[/green]: Limpa o histórico de conversa (reseta o contexto do agente).\n"
+            "- [green]/history <limite>[/green]: Exibe ou altera a quantidade de mensagens enviadas no histórico (contexto recente) ao LLM.\n"
             "- [green]/models[/green]: Lista os modelos disponíveis no LM Studio e permite trocar.\n"
             "- [green]/safe[/green]: Ativa o Modo Seguro (execução apenas de comandos permitidos).\n"
             "- [green]/unsafe[/green]: Desativa o Modo Seguro (requer senha de segurança).\n"
@@ -168,6 +169,22 @@ def handle_slash_command(cmd_input: str) -> bool:
             console.print("[bold green]Histórico de conversa limpo com sucesso![/bold green] O contexto do agente foi resetado.")
         else:
             console.print("[bold red]Erro ao tentar limpar o histórico de conversa do banco de dados.[/bold red]")
+            
+    elif command == "/history":
+        if len(parts) > 1:
+            val_str = parts[1]
+            if val_str.isdigit():
+                val = int(val_str)
+                if val >= 1:
+                    db.set_chat_history_limit(val)
+                    console.print(f"[bold green][SUCESSO][/bold green] Limite do histórico de chat configurado para [yellow]{val}[/yellow] mensagens.")
+                else:
+                    console.print("[red]O limite deve ser de pelo menos 1 mensagem.[/red]")
+            else:
+                console.print("[red]Uso correto: /history <limite_inteiro> (ex: /history 4)[/red]")
+        else:
+            current_limit = db.get_chat_history_limit()
+            console.print(f"O limite atual de histórico enviado ao LLM é de [yellow]{current_limit}[/yellow] mensagens.")
         
     elif command == "/status":
         safe_str = "[bold green]SEGURO[/bold green]" if security.is_safe_mode() else "[bold red]NÃO-SEGURO[/bold red]"

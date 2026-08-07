@@ -77,6 +77,7 @@ Digite esses comandos diretamente na barra de entrada de texto no terminal:
 * **`/help`**: Exibe o painel de ajuda com todos os comandos e parâmetros.
 * **`/status`**: Mostra o estado de segurança (Safe/Unsafe), a URL de comunicação com o LM Studio e o modelo de IA atualmente ativo.
 * **`/clear`**: Limpa o histórico de chat da sessão corrente no banco (reseta a janela de contexto deslizante do agente).
+* **`/history <limite>`**: Exibe ou configura o limite dinâmico de mensagens de histórico enviadas ao LLM (ex: `/history 4`).
 * **`/models`**: Consulta os modelos de linguagem carregados no LM Studio e permite alternar o modelo ativo.
 * **`/safe`**: Ativa instantaneamente o Modo Seguro.
 * **`/unsafe`**: Solicita a senha de segurança para desativar o Modo Seguro.
