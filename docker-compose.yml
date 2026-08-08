@@ -1,0 +1,46 @@
+services:
+  agent:
+    build: .
+    container_name: meu-agente-cli
+    environment:
+      # Variáveis de conexão com o banco de dados (serviço do Docker)
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=meu_agente_db
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres_seguro
+      # URL para o LM Studio no Windows Host
+      - LM_STUDIO_URL=http://host.docker.internal:1234
+    volumes:
+      # Persiste arquivos de configurações e banco de dados
+      - agent_data:/root/.config/meu-agente-cli
+      # Compartilha o safe_commands.json para fácil edição
+      - ./safe_commands.json:/app/safe_commands.json
+    stdin_open: true  # Mantém o stdin aberto para interação no console
+    tty: true         # Abre a tty do terminal
+    depends_on:
+      db:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Resolve o IP do Windows Host dentro do container
+
+  db:
+    image: postgres:15-alpine
+    container_name: meu-agente-db
+    environment:
+      - POSTGRES_DB=meu_agente_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres_seguro
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d meu_agente_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  agent_data:
+  pgdata:

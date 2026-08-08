@@ -54,6 +54,7 @@ Ele utiliza o gerenciador de dependências `uv` para máxima velocidade e isolam
 
 ## 🚀 Como Inicializar
 
+### Opção A: Executando localmente no WSL
 1. Entre na pasta do projeto no WSL:
    ```bash
    cd meu-agente-cli
@@ -62,6 +63,19 @@ Ele utiliza o gerenciador de dependências `uv` para máxima velocidade e isolam
    ```bash
    uv run meu-agente
    ```
+
+### Opção B: Executando com Docker Compose 🐳
+Este projeto vem com suporte nativo a Docker, permitindo levantar o banco de dados PostgreSQL e o assistente de forma isolada com um único comando.
+
+1. Suba o banco e compile o container do agente:
+   ```bash
+   docker compose up -d --build
+   ```
+2. Conecte-se interativamente no console do agente para chat:
+   ```bash
+   docker compose run agent
+   ```
+   *(Nota: O parâmetro `host.docker.internal` resolve automaticamente o endereço do Windows Host para conectar no LM Studio).*
 
 ### Resiliência na Inicialização:
 * **PostgreSQL**: Se o PostgreSQL do WSL estiver parado, o script tentará iniciá-lo automaticamente.

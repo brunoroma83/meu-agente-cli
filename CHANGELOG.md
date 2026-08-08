@@ -9,6 +9,7 @@ O formato é baseado no [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 ## [Unreleased]
 
 ### Added
+- **Suporte a Containerização Docker**: Adicionados arquivos `Dockerfile` e `docker-compose.yml` para empacotamento completo do agente e do banco PostgreSQL isolado em containers.
 - **Assinatura Criptográfica RSA**: Whitelist de comandos seguros `safe_commands.json` agora é validada criptograficamente em tempo de execução usando uma assinatura digital gerada por chave assimétrica RSA.
 - **Comando `/unsafe sign`**: Permite ao usuário (humano) assinar digitalmente o arquivo `safe_commands.json` após editá-lo, fornecendo sua senha de segurança.
 - **Estrutura de Plugins Dinâmicos**: Nova pasta `custom_tools/` e arquivo `custom_tools.json` para carregar ferramentas customizadas sem a necessidade de editar código-fonte Python central.

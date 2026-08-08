@@ -10,7 +10,7 @@ from psycopg import Connection
 from croniter import croniter
 from meu_agente_cli.config import load_bootstrap_config, clean_string
 
-DB_NAME = "meu_agente_cli"
+DB_NAME = os.environ.get("DB_NAME") or "meu_agente_cli"
 
 def run_wsl_command(cmd_list: list) -> subprocess.CompletedProcess:
     """Executa um comando no WSL."""
@@ -44,6 +44,14 @@ def ensure_postgresql_service() -> bool:
     """
     Garante que o PostgreSQL esteja instalado e com o serviço rodando no WSL.
     """
+    if os.path.exists("/.dockerenv"):
+        return True
+
+    cfg = load_bootstrap_config()
+    db_host = os.environ.get("DB_HOST") or cfg.get("db_host", "127.0.0.1")
+    if db_host not in ("127.0.0.1", "localhost"):
+        return True
+
     if not is_postgresql_installed():
         success = install_postgresql()
         if not success:
@@ -65,31 +73,42 @@ def ensure_postgresql_service() -> bool:
             
     return True
 
-def get_connection(dbname: str = DB_NAME) -> Connection:
+def get_connection(dbname: Optional[str] = None) -> Connection:
     """
     Retorna uma conexão com o banco de dados PostgreSQL.
     """
-    cfg = load_bootstrap_config()
-    db_user = cfg.get("db_user", "postgres")
-    db_pass = cfg.get("db_password", "")
-    db_host = cfg.get("db_host", "127.0.0.1")
-    db_port = cfg.get("db_port", 5432)
+    if dbname is None:
+        dbname = DB_NAME
 
-    # 1. Tenta peer authentication local (Unix socket no WSL)
+    cfg = load_bootstrap_config()
+    db_user = os.environ.get("DB_USER") or cfg.get("db_user", "postgres")
+    db_pass = os.environ.get("DB_PASSWORD") or cfg.get("db_password", "")
+    db_host = os.environ.get("DB_HOST") or cfg.get("db_host", "127.0.0.1")
+    db_port_val = os.environ.get("DB_PORT") or cfg.get("db_port", 5432)
+
     try:
-        return psycopg.connect(dbname=dbname)
-    except psycopg.Error:
-        # 2. Se falhar, tenta conexão TCP com as credenciais salvas
+        db_port = int(db_port_val)
+    except (ValueError, TypeError):
+        db_port = 5432
+
+    # 1. Tenta peer authentication local (Unix socket no WSL) se não estiver no Docker
+    if db_host in ("127.0.0.1", "localhost") and not os.path.exists("/.dockerenv"):
         try:
-            return psycopg.connect(
-                dbname=dbname,
-                user=db_user,
-                password=db_pass,
-                host=db_host,
-                port=db_port
-            )
-        except psycopg.Error as e:
-            raise e
+            return psycopg.connect(dbname=dbname)
+        except psycopg.Error:
+            pass
+
+    # 2. Se falhar ou se for conexão remota, tenta conexão TCP
+    try:
+        return psycopg.connect(
+            dbname=dbname,
+            user=db_user,
+            password=db_pass,
+            host=db_host,
+            port=db_port
+        )
+    except psycopg.Error as e:
+        raise e
 
 def init_database() -> bool:
     """
@@ -111,6 +130,10 @@ def init_database() -> bool:
             err_msg = str(e)
             # Se for erro de senha / autenticação, solicita credenciais interativamente
             if "password" in err_msg or "authentication" in err_msg or "fe_sendauth" in err_msg:
+                if os.environ.get("DB_HOST") or os.path.exists("/.dockerenv"):
+                    print(f"[ERROR] Erro de autenticação com o banco de dados configurado via ambiente: {e}", file=sys.stderr)
+                    return False
+
                 print(f"\n[POSTGRES] Erro de autenticação: {err_msg.strip()}")
                 print("Por favor, forneça as credenciais de acesso TCP/IP para o PostgreSQL no WSL.")
                 

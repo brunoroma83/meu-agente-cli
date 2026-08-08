@@ -94,6 +94,10 @@ def get_lm_studio_url() -> str:
     """
     Retorna a URL base do LM Studio após verificar IP configurado ou detectado.
     """
+    env_url = os.environ.get("LM_STUDIO_URL")
+    if env_url:
+        return env_url
+
     config = load_bootstrap_config()
     host = config.get("lm_studio_host")
     if not host:
