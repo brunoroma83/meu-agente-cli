@@ -32,7 +32,7 @@ Ele utiliza o gerenciador de dependências `uv` para máxima velocidade e isolam
 * **rss Feeds**: Agregador de feed RSS de Economia, Tecnologia e Ciência.
 
 ### 5. 🛡️ Segurança CLI (Modo Seguro vs. Não-Seguro)
-* **Modo Seguro**: Impede a execução de comandos não listados em uma whitelist de segurança no WSL.
+* **Modo Seguro**: Impede a execução de comandos não listados em uma whitelist de segurança no WSL. Permite carregar comandos adicionais seguros a partir do arquivo `safe_commands.json` na raiz do projeto, validando sua integridade através de **assinatura criptográfica assimétrica RSA**. A assinatura garante que somente o usuário (humano) com a senha de segurança consegue assinar alterações no arquivo (através do comando `/unsafe sign`), enquanto o agente apenas valida usando a chave pública do banco (sem pedir senha ao iniciar), impedindo que o agente burle a whitelist.
 * **Modo Não-Seguro**: Permite rodar comandos CLI arbitrários, condicionado à validação de uma **Senha de Segurança** (salva no PostgreSQL com criptografia SHA-256) e à confirmação interativa do usuário.
 * **Restrição de Subagentes**: Tarefas rodando em segundo plano são estritamente proibidas de executar comandos CLI inseguros, prevenindo qualquer execução autônoma indevida.
 
@@ -81,6 +81,7 @@ Digite esses comandos diretamente na barra de entrada de texto no terminal:
 * **`/models`**: Consulta os modelos de linguagem carregados no LM Studio e permite alternar o modelo ativo.
 * **`/safe`**: Ativa instantaneamente o Modo Seguro.
 * **`/unsafe`**: Solicita a senha de segurança para desativar o Modo Seguro.
+  - `/unsafe sign`: Solicita a senha para assinar criptograficamente (`RSA`) o arquivo `safe_commands.json` após você editá-lo.
 * **`/notes`**: Exibe todas as notas da base de conhecimento persistente.
 * **`/cron`**: Gerencia e exibe os subagentes agendados.
   - `/cron add`: Cria um cron job interativamente.

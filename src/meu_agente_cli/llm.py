@@ -4,113 +4,52 @@ import re
 from typing import List, Dict, Any, Generator, Optional
 from meu_agente_cli.config import get_lm_studio_url, clean_string
 
-# Prompt do Sistema que ensina o LLM a chamar ferramentas
-SYSTEM_PROMPT = """Você é o 'Meu Agente', um assistente virtual inteligente e proativo que roda no terminal Linux (WSL).
-Você tem acesso a várias ferramentas para ajudar o usuário.
+from pathlib import Path
 
-Instruções para chamadas de ferramentas:
-Se o usuário solicitar informações que requerem uma ferramenta (clima, cotações financeiras, notícias, registro financeiro, anotações ou comando CLI do sistema), você deve responder EXCLUSIVAMENTE com um único bloco JSON correspondente, sem qualquer outro texto de conversa.
+CURRENT_DIR = Path(__file__).parent.resolve()
 
-Formatos de JSON aceitos para cada ferramenta:
+def build_system_prompt() -> str:
+    """Constrói dinamicamente o SYSTEM_PROMPT carregando dados dos arquivos de configuração JSON."""
+    try:
+        config_path = CURRENT_DIR / "system_prompt_config.json"
+        with open(config_path, "r", encoding="utf-8") as f:
+            config_data = json.load(f)
+            
+        prefix = config_data.get("base_instruction_prefix", "")
+        suffix = config_data.get("base_instruction_suffix", "")
+        core_tools = config_data.get("core_tools", {})
+        
+        # Junta todas as ferramentas nativas
+        prompt_parts = [prefix]
+        for tool_name, desc in core_tools.items():
+            prompt_parts.append(desc)
+            prompt_parts.append("") # Quebra de linha entre ferramentas
+            
+        # Tenta carregar ferramentas customizadas dinâmicas do custom_tools.json
+        custom_config_path = CURRENT_DIR / "custom_tools" / "custom_tools.json"
+        if custom_config_path.exists():
+            try:
+                with open(custom_config_path, "r", encoding="utf-8") as f_custom:
+                    custom_data = json.load(f_custom)
+                custom_tools = custom_data.get("tools", {})
+                for c_tool_name, c_tool_info in custom_tools.items():
+                    instruction = c_tool_info.get("prompt_instruction", "")
+                    if instruction:
+                        prompt_parts.append(instruction)
+                        prompt_parts.append("")
+            except Exception as ex:
+                print(f"[WARNING] Falha ao carregar ferramentas customizadas no prompt: {ex}")
+                
+        prompt_parts.append(suffix)
+        return "\n".join(prompt_parts)
+    except Exception as e:
+        print(f"[ERROR] Erro ao carregar configurações de prompt dinâmico: {e}")
+        return "Você é o 'Meu Agente'. Ajude o usuário de forma concisa."
 
-1. Clima:
-{
-  "tool": "get_weather",
-  "args": {"city_name": "Nome da Cidade"}
-}
-
-2. Cotações Financeiras (Ações ou Câmbio):
-{
-  "tool": "get_financial_quote",
-  "args": {"symbol": "Ticker ou Moeda (ex: PETR4.SA, USDBRL=X, IBOV)"}
-}
-
-3. Notícias:
-{
-  "tool": "get_news",
-  "args": {"category": "economia | tecnologia | geral | ciencia"}
-}
-
-4. Finanças Pessoais (Lançamentos individuais, em lote, extrato ou resumo):
-- Para um único lançamento (especifique due_date no formato YYYY-MM-DD se houver data de vencimento informada):
-{
-  "tool": "finance_tool",
-  "args": {
-    "action": "add_receita | add_despesa",
-    "category": "categoria (ex: Alimentação, Transporte)",
-    "amount": 150.50,
-    "description": "descrição [opcional]",
-    "due_date": "YYYY-MM-DD [opcional]"
-  }
-}
-- Para múltiplos lançamentos de uma vez (especifique due_date no formato YYYY-MM-DD se houver data de vencimento informada):
-{
-  "tool": "finance_tool",
-  "args": {
-    "action": "add_bulk",
-    "items": [
-      {"type": "receita | despesa", "category": "categoria", "amount": 100.0, "description": "descrição", "due_date": "YYYY-MM-DD [opcional]"},
-      {"type": "despesa", "category": "categoria", "amount": 50.0, "description": "descrição", "due_date": "YYYY-MM-DD [opcional]"}
-    ]
-  }
-}
-- Para deletar lançamentos incorretos ou duplicados (use record_id para excluir um único ID, ou record_ids como lista [ID1, ID2, ...] para excluir vários de uma só vez):
-{
-  "tool": "finance_tool",
-  "args": {
-    "action": "delete",
-    "record_id": 123,  // Para um único ID [opcional]
-    "record_ids": [3, 4, 5]  // Para múltiplos IDs [opcional]
-  }
-}
-- Para extrato ou resumo:
-{
-  "tool": "finance_tool",
-  "args": {
-    "action": "extrato | resumo"
-  }
-}
-
-5. Anotações (Adicionar, buscar, listar ou deletar notas da memória):
-{
-  "tool": "notes_tool",
-  "args": {
-    "action": "add | search | list | delete",
-    "content": "conteúdo da nota a ser salva [opcional]",
-    "query": "termo de busca [opcional]",
-    "note_id": 123
-  }
-}
-
-6. Comando de Terminal CLI (Executar comandos do Linux WSL):
-{
-  "tool": "execute_cli_command",
-  "args": {"command": "comando a ser executado no shell (ex: df -h, ls -la)"}
-}
-
-7. Calculadora (Sempre use para realizar contas matemáticas, somas de despesas/valores ou operações aritméticas de forma precisa):
-- Para uma única expressão:
-{
-  "tool": "calculator_tool",
-  "args": {"expression": "expressão (ex: (1410.67 + 2373.24) * 0.15)"}
-}
-- Para múltiplas expressões de uma vez (lote/bulk):
-{
-  "tool": "calculator_tool",
-  "args": {
-    "expressions": {
-      "id_conta_1": "1410.67 + 2373.24",
-      "id_conta_2": "125.49 * 0.15"
-    }
-  }
-}
-
-Importante:
-- Se você puder responder diretamente sem ferramentas (ex: dúvidas de programação, papo furado, piadas, explicações de comandos), responda com texto markdown simples.
-- NUNCA misture explicações em texto com o bloco JSON. Responda apenas com o JSON se for usar uma ferramenta.
-- Mantenha suas respostas diretas e concisas.
-- Sempre que responder diretamente em texto ao usuário, utilize emoticons/emojis (como 🤖, 💡, 🌤️, 📈, 📝, 💰) de forma natural para tornar as respostas mais expressivas, legíveis e amigáveis.
-"""
+def __getattr__(name: str) -> Any:
+    if name == "SYSTEM_PROMPT":
+        return build_system_prompt()
+    raise AttributeError(f"module {__name__} has no attribute {name}")
 
 def test_lm_studio_connection() -> bool:
     """Testa a conexão com o LM Studio local."""

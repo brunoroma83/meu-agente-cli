@@ -1,0 +1,14 @@
+{
+  "tools": {
+    "ping_google": {
+      "prompt_instruction": "8. Ping Google (Sempre use para testar a conectividade direta de internet se o usuário pedir para checar a conexão):\n{\n  \"tool\": \"ping_google\",\n  \"args\": {}\n}",
+      "python_module": "meu_agente_cli.custom_tools.ping_google",
+      "function_name": "run"
+    },
+    "google_calendar_tool": {
+      "prompt_instruction": "9. Google Calendar (Consultar eventos do Google Calendar):\n{\n  \"tool\": \"google_calendar_tool\",\n  \"args\": {\n    \"calendar_id\": \"bruuno@gmail.com\",\n    \"time_range\": \"today | tomorrow | week | next_week | month\",\n    \"custom_start\": \"YYYY-MM-DDTHH:MM:SSZ [opcional]\",\n    \"custom_end\": \"YYYY-MM-DDTHH:MM:SSZ [opcional]\"\n  }\n}",
+      "python_module": "meu_agente_cli.custom_tools.google_calendar_tool",
+      "function_name": "run"
+    }
+  }
+}

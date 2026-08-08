@@ -180,7 +180,33 @@ def process_agent_turn(user_input: str, console: Console) -> None:
             elif tool_name == "calculator_tool":
                 tool_result = tools.calculator_tool(**args)
             else:
-                tool_result = f"Erro: Ferramenta '{tool_name}' não suportada."
+                # Tenta carregar a ferramenta dinamicamente do custom_tools.json
+                from pathlib import Path
+                import importlib
+                
+                custom_config_path = Path(__file__).parent.resolve() / "custom_tools" / "custom_tools.json"
+                loaded = False
+                if custom_config_path.exists():
+                    try:
+                        with open(custom_config_path, "r", encoding="utf-8") as f_custom:
+                            custom_data = json.load(f_custom)
+                        custom_tools = custom_data.get("tools", {})
+                        if tool_name in custom_tools:
+                            tool_info = custom_tools[tool_name]
+                            python_module = tool_info.get("python_module")
+                            function_name = tool_info.get("function_name", "run")
+                            
+                            # Importa o módulo dinamicamente e executa a função
+                            module = importlib.import_module(python_module)
+                            func = getattr(module, function_name)
+                            tool_result = func(**args)
+                            loaded = True
+                    except Exception as ex:
+                        tool_result = f"Erro ao tentar importar/executar ferramenta customizada '{tool_name}': {ex}"
+                        loaded = True
+                
+                if not loaded:
+                    tool_result = f"Erro: Ferramenta '{tool_name}' não suportada."
         except Exception as e:
             tool_result = f"Erro na execução da ferramenta '{tool_name}': {str(e)}"
             

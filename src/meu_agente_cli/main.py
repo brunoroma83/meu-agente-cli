@@ -234,6 +234,14 @@ def handle_slash_command(cmd_input: str) -> bool:
         console.print("[bold green]Modo Seguro ATIVADO.[/bold green] Comandos CLI não autorizados serão bloqueados.")
         
     elif command == "/unsafe":
+        if len(parts) > 1 and parts[1].lower() == "sign":
+            password = getpass.getpass("Digite sua Senha de Segurança para assinar safe_commands.json: ")
+            if security.sign_safe_commands_file(password):
+                console.print("[bold green][SUCESSO][/bold green] Arquivo [yellow]safe_commands.json[/yellow] assinado com sucesso! Whitelist criptografada atualizada.")
+            else:
+                console.print("[bold red][ERRO][/bold red] Falha ao assinar. Senha incorreta ou chaves inválidas.")
+            return True
+            
         if not security.is_safe_mode():
             console.print("[yellow]O agente já está em Modo Não-Seguro.[/yellow]")
             return True
