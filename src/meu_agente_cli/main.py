@@ -17,14 +17,25 @@ console = Console()
 
 def print_banner():
     banner_text = Text()
-    banner_text.append("=== MEU AGENTE CLI ===\n", style="bold cyan")
-    banner_text.append("Seu assistente pessoal e financeiro inteligente no WSL\n", style="italic gray")
-    banner_text.append("-----------------------------------------------------", style="blue")
+    banner_text.append("MEU AGENTE CLI - Assistente Pessoal & Financeiro Inteligente\n", style="bold cyan")
+    banner_text.append("Seu assistente pessoal de produtividade e finanças no WSL/Docker\n\n", style="italic gray")
+    banner_text.append("Versão: v1.1.0\n", style="bold white")
+    banner_text.append("Última Atualização: 08/08/2026\n\n", style="bold white")
+    banner_text.append("Principais Funcionalidades:\n", style="bold yellow")
+    banner_text.append(" - 🛡️ Whitelist de Segurança Criptográfica com Assinatura RSA\n", style="green")
+    banner_text.append(" - 💰 Finanças Pessoais com Soft Delete, Histórico e Projeções\n", style="green")
+    banner_text.append(" - 📥 Importador de CSV Financeiro com Mapeamento Inteligente\n", style="green")
+    banner_text.append(" - 🔐 Backup e Restauração Criptografados (AES-256 e Gzip)\n", style="green")
+    banner_text.append(" - 📝 Notas Persistentes de Longo Prazo no PostgreSQL\n", style="green")
+    banner_text.append(" - 🤖 Agendador de Subagentes em Segundo Plano (Cron Jobs)\n", style="green")
+    banner_text.append(" - 🧮 Calculadora Avançada em Lote e Hot reload de Plugins\n", style="green")
+    banner_text.append(" - 🌤️ Integrações Nativas de Clima, Ações Financeiras e Notícias RSS\n", style="green")
+    banner_text.append("---------------------------------------------------------------", style="blue")
     
     console.print(Panel(
         banner_text,
         border_style="cyan",
-        title="[bold green]Inicializando...[/bold green]",
+        title="[bold green]MEU AGENTE CLI[/bold green]",
         expand=False
     ))
 
@@ -745,6 +756,7 @@ def handle_slash_command(cmd_input: str) -> bool:
     return True
 
 def main():
+    console.clear()
     print_banner()
     
     # Inicializa todos os componentes

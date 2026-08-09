@@ -146,6 +146,7 @@ def parse_tool_call(response_text: str) -> Optional[Dict[str, Any]]:
     """
     Analisa se a resposta do LLM contém uma chamada de ferramenta no formato JSON.
     Aceita JSON puro ou encapsulado em blocos de código markdown.
+    Garante resiliência mesmo se a LLM gerou JSON com aspas não escapadas ou novas linhas cruas.
     """
     text = response_text.strip()
     if not text:
@@ -154,15 +155,48 @@ def parse_tool_call(response_text: str) -> Optional[Dict[str, Any]]:
     # Tenta encontrar bloco de código markdown
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if not match:
-        # Se não achou bloco markdown, procura a primeira ocorrência de { e a última de }
+        # Procura a primeira ocorrência de { e a última de }
         match = re.search(r"(\{.*\})", text, re.DOTALL)
         
     if match:
+        raw_json = match.group(1).strip()
         try:
-            parsed = json.loads(match.group(1))
+            parsed = json.loads(raw_json)
             if "tool" in parsed:
                 return parsed
         except Exception:
-            pass
-            
+            # Fallback robusto se a LLM gerou JSON com aspas internas não escapadas ou quebras de linha cruas
+            try:
+                # Tenta extrair a ferramenta e seus argumentos usando regexes mais flexíveis
+                tool_match = re.search(r'"tool"\s*:\s*"([^"]+)"', raw_json)
+                if tool_match:
+                    tool_name = tool_match.group(1)
+                    args = {}
+                    
+                    # Para a ferramenta execute_cli_command, extraímos o command de forma especial
+                    if tool_name == "execute_cli_command":
+                        cmd_match = re.search(r'"command"\s*:\s*"(.*)"', raw_json, re.DOTALL)
+                        if cmd_match:
+                            cmd_val = cmd_match.group(1).strip()
+                            
+                            # Remove chaves de fechamento finais se capturadas no modo ganancioso
+                            # Tratamos de trás para frente para limpar os fechamentos do JSON
+                            for suffix in ['"} }', '"} \n}', '"}', '}']:
+                                if cmd_val.endswith(suffix):
+                                    cmd_val = cmd_val[:-len(suffix)].strip()
+                                    break
+                                
+                            # Trata se a última aspa sobrou no final
+                            if cmd_val.endswith('"') and not cmd_val.endswith('\\"'):
+                                cmd_val = cmd_val[:-1]
+                            
+                            # Normaliza quebras de linha e aspas
+                            cmd_val = cmd_val.replace('\\n', '\n').replace('\\"', '"')
+                            args["command"] = cmd_val
+                            
+                    # Retorna se conseguiu achar a ferramenta e mapear
+                    return {"tool": tool_name, "args": args}
+            except Exception:
+                pass
+                
     return None

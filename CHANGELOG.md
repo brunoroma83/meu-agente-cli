@@ -9,6 +9,7 @@ O formato é baseado no [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 ## [Unreleased]
 
 ### Added
+- **Limpeza de Tela e Banner Informativo**: Inicialização aprimorada que limpa o terminal (`console.clear()`) e exibe um painel de boas-vindas completo citando a versão (`v1.1.0`), última data de modificação e lista de principais recursos do agente.
 - **Backup e Restauração Criptografados**: Novos comandos `/backup` e `/restore` para exportação e importação seguras de toda a base de dados (tabelas e parâmetros) em código Python puro (sem dependência de binários externos), protegendo os dados com criptografia AES-256 (via Fernet com PBKDF2) e compactação Gzip.
 - **Suporte a Containerização Docker**: Adicionados arquivos `Dockerfile` e `docker-compose.yml` para empacotamento completo do agente e do banco PostgreSQL isolado em containers.
 - **Assinatura Criptográfica RSA**: Whitelist de comandos seguros `safe_commands.json` agora é validada criptograficamente em tempo de execução usando uma assinatura digital gerada por chave assimétrica RSA.
@@ -24,7 +25,7 @@ O formato é baseado no [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 ### Changed
 - **Exclusão Lógica (Soft Delete)**: O agente passou a adotar exclusão lógica. Registros deletados de despesas/receitas, notas ou cronjobs agora apenas são inativados (`active = false`), impedindo perdas destrutivas de dados.
 - **Filtro Padrão do `/finance`**: O comando sem argumentos agora assume o mês corrente por padrão (ex: `mes=08-2026`).
-- **Resiliência do Parser de Ferramentas**: Modificado o interpretador de fluxo para ser tolerante a respostas conversacionais da LLM que antecedam o bloco de código JSON de chamada da ferramenta.
+- **Resiliência do Parser de Ferramentas**: Modificado o interpretador de fluxo para ser tolerante a respostas conversacionais da LLM que antecedam o bloco de código JSON. Adicionado também um parser de **fallback robusto com expressões regulares** que repara e extrai chamadas de comandos mesmo se a LLM gerar JSON malformado contendo aspas não escapadas ou quebras de linha cruas em scripts.
 - **Otimização de Conexão e Codificação**: Tratamento para codepoints de caracteres `surrogate` inválidos vindos de inputs ou outputs no WSL, prevenindo quebras em payloads JSON ou SQL.
 
 ### Security

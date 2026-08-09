@@ -1,13 +1,18 @@
 {
   "tools": {
     "ping_google": {
-      "prompt_instruction": "8. Ping Google (Sempre use para testar a conectividade direta de internet se o usuário pedir para checar a conexão):\n{\n  \"tool\": \"ping_google\",\n  \"args\": {}\n}",
+      "prompt_instruction": "8. Ping Google (Sempre use para testar a conectividade direta de internet se o usu\u00e1rio pedir para checar a conex\u00e3o):\n{\n  \"tool\": \"ping_google\",\n  \"args\": {}\n}",
       "python_module": "meu_agente_cli.custom_tools.ping_google",
       "function_name": "run"
     },
     "google_calendar_tool": {
       "prompt_instruction": "9. Google Calendar (Consultar eventos do Google Calendar):\n{\n  \"tool\": \"google_calendar_tool\",\n  \"args\": {\n    \"calendar_id\": \"bruuno@gmail.com\",\n    \"time_range\": \"today | tomorrow | week | next_week | month\",\n    \"custom_start\": \"YYYY-MM-DDTHH:MM:SSZ [opcional]\",\n    \"custom_end\": \"YYYY-MM-DDTHH:MM:SSZ [opcional]\"\n  }\n}",
       "python_module": "meu_agente_cli.custom_tools.google_calendar_tool",
+      "function_name": "run"
+    },
+    "daily_tips_tool": {
+      "prompt_instruction": "Obter uma dica di\u00e1ria de trabalho aut\u00f4nomo para renda extra. Use esta ferramenta para receber uma nova dica baseada nos conhecimentos do usu\u00e1rio em inform\u00e1tica, programa\u00e7\u00e3o, IA, el\u00e9trica, engenharia cl\u00ednica e influenciador digital.",
+      "python_module": "meu_agente_cli.custom_tools.daily_tips_tool",
       "function_name": "run"
     }
   }
