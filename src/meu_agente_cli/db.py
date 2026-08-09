@@ -673,3 +673,77 @@ def delete_cron_job(job_id: int) -> bool:
     except Exception as e:
         print(f"[ERROR] Erro ao desativar cronjob: {e}", file=sys.stderr)
         return False
+
+def generate_sql_dump() -> str:
+    """Gera um dump SQL portátil contendo todos os dados e estruturas do banco."""
+    conn = get_connection()
+    dump = []
+    
+    # Ordem das tabelas para limpeza e inserção segura
+    tables = ["settings", "user_notes", "financial_records", "cron_jobs"]
+    
+    for t in reversed(tables):
+        dump.append(f"DELETE FROM {t};")
+        
+    with conn.cursor() as cur:
+        # Settings
+        cur.execute("SELECT key, value FROM settings")
+        for key, val in cur.fetchall():
+            val_esc = val.replace("'", "''")
+            dump.append(f"INSERT INTO settings (key, value) VALUES ('{key}', '{val_esc}');")
+            
+        # User Notes
+        cur.execute("SELECT id, content, created_at, active FROM user_notes")
+        for nid, content, created_at, active in cur.fetchall():
+            content_esc = content.replace("'", "''")
+            dt_str = created_at.strftime("%Y-%m-%d %H:%M:%S")
+            dump.append(
+                f"INSERT INTO user_notes (id, content, created_at, active) "
+                f"VALUES ({nid}, '{content_esc}', '{dt_str}', {active});"
+            )
+            
+        # Financial Records
+        cur.execute("SELECT id, type, category, amount, description, date, due_date, active FROM financial_records")
+        for rid, rtype, cat, amount, desc, dt, due_date, active in cur.fetchall():
+            desc_esc = desc.replace("'", "''") if desc else ""
+            cat_esc = cat.replace("'", "''")
+            date_str = dt.strftime("%Y-%m-%d")
+            due_date_str = f"'{due_date.strftime('%Y-%m-%d')}'" if due_date else "NULL"
+            dump.append(
+                f"INSERT INTO financial_records (id, type, category, amount, description, date, due_date, active) "
+                f"VALUES ({rid}, '{rtype}', '{cat_esc}', {amount}, '{desc_esc}', '{date_str}', {due_date_str}, {active});"
+            )
+            
+        # Cron Jobs
+        cur.execute("SELECT id, name, cron_expression, next_run, last_run, task_prompt, status, active FROM cron_jobs")
+        for cid, name, cron_expression, next_run, last_run, task_prompt, status, active in cur.fetchall():
+            name_esc = name.replace("'", "''")
+            expr_esc = cron_expression.replace("'", "''")
+            prompt_esc = task_prompt.replace("'", "''")
+            next_run_str = next_run.strftime("%Y-%m-%d %H:%M:%S")
+            last_run_str = f"'{last_run.strftime('%Y-%m-%d %H:%M:%S')}'" if last_run else "NULL"
+            dump.append(
+                f"INSERT INTO cron_jobs (id, name, cron_expression, next_run, last_run, task_prompt, status, active) "
+                f"VALUES ({cid}, '{name_esc}', '{expr_esc}', '{next_run_str}', {last_run_str}, '{prompt_esc}', '{status}', {active});"
+            )
+            
+        # Sincroniza as sequências de ID seriais para evitar colisões
+        for table in ["user_notes", "financial_records", "cron_jobs"]:
+            dump.append(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), COALESCE(MAX(id), 1)) FROM {table};")
+            
+    conn.close()
+    return "\n".join(dump)
+
+def restore_sql_dump(sql_content: str) -> bool:
+    """Executa o script SQL de restauração dentro de uma transação atômica."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            # Executa todo o dump SQL de uma vez
+            cur.execute(sql_content)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Falha ao restaurar dump SQL: {e}", file=sys.stderr)
+        return False

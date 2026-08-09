@@ -282,6 +282,68 @@ def verify_password(password: str) -> bool:
     except Exception:
         return False
 
+def encrypt_data(data: str, password: str) -> bytes:
+    """Criptografa dados em texto plano usando AES-256 (via Fernet) e compactação Gzip."""
+    import base64
+    import gzip
+    import os
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.fernet import Fernet
+    
+    # 1. Compacta com gzip para otimização de espaço
+    compressed = gzip.compress(data.encode('utf-8'))
+    
+    # 2. Gera salt aleatório de 16 bytes
+    salt = os.urandom(16)
+    
+    # 3. Deriva chave AES a partir da senha fornecida
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(password.encode('utf-8')))
+    
+    # 4. Criptografa dados
+    f = Fernet(key)
+    encrypted = f.encrypt(compressed)
+    
+    # 5. Retorna o salt prefixado aos dados criptografados
+    return salt + encrypted
+
+def decrypt_data(encrypted_data: bytes, password: str) -> str:
+    """Descriptografa dados compactados em AES-256 usando a senha fornecida."""
+    import base64
+    import gzip
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.fernet import Fernet
+    
+    if len(encrypted_data) < 16:
+        raise ValueError("Dados criptografados inválidos ou corrompidos.")
+        
+    # 1. Extrai o salt
+    salt = encrypted_data[:16]
+    encrypted = encrypted_data[16:]
+    
+    # 2. Deriva a chave
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(password.encode('utf-8')))
+    
+    # 3. Descriptografa
+    f = Fernet(key)
+    decrypted_compressed = f.decrypt(encrypted)
+    
+    # 4. Descompacta gzip
+    return gzip.decompress(decrypted_compressed).decode('utf-8')
+
 def run_bash_command(cmd_str: str) -> Tuple[int, str, str]:
     """
     Executa o comando no WSL usando bash -c.

@@ -14,8 +14,10 @@ services:
     volumes:
       # Persiste arquivos de configurações e banco de dados
       - agent_data:/root/.config/meu-agente-cli
-      # Compartilha o safe_commands.json para fácil edição
-      - ./safe_commands.json:/app/safe_commands.json
+      # Mapeia toda a pasta do projeto para o container, sincronizando uploads, backups, docs, etc.
+      - .:/app
+      # Ignora a pasta virtualenv local (.venv) para usar o ambiente isolado compilado no container
+      - /app/.venv
     stdin_open: true  # Mantém o stdin aberto para interação no console
     tty: true         # Abre a tty do terminal
     depends_on:

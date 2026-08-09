@@ -134,6 +134,214 @@ def initialize_components() -> bool:
             
     return True
 
+def handle_finance_csv_import(console: Console) -> None:
+    """Importa receitas e despesas a partir de uploads/finance.csv com mapeamento dinâmico."""
+    import os
+    import csv
+    import shutil
+    import unicodedata
+    from datetime import datetime
+    from typing import Optional
+    
+    # Define caminhos
+    base_dir = os.getcwd()
+    uploads_dir = os.path.join(base_dir, "uploads")
+    archive_dir = os.path.join(uploads_dir, "archive")
+    csv_file = os.path.join(uploads_dir, "finance.csv")
+    
+    # Garante existência dos diretórios
+    os.makedirs(archive_dir, exist_ok=True)
+    
+    # 1. Se o arquivo não existir, exibe guia de formatação
+    if not os.path.exists(csv_file):
+        from rich.panel import Panel
+        from rich.table import Table
+        
+        guide_table = Table(title="Colunas Aceitas e Mapeamento Automático", expand=True)
+        guide_table.add_column("Campo no BD", style="cyan", width=15)
+        guide_table.add_column("Colunas Mapeadas (Qualquer uma)", style="magenta")
+        guide_table.add_column("Tipo/Regras", style="white")
+        
+        guide_table.add_row("type", "tipo, type, tiporegistro, transacao", "receita OU despesa (padrão: despesa)")
+        guide_table.add_row("category", "categoria, category, grupo, classificacao", "Obrigatório. Ex: Alimentação, Salário")
+        guide_table.add_row("amount", "valor, val, amount, preco, custo, total", "Obrigatório. Ex: 150.50 ou 1.500,00")
+        guide_table.add_row("description", "descricao, description, detalhes, obs", "Opcional. Texto descritivo")
+        guide_table.add_row("due_date", "vencimento, due_date, datavencimento, venc", "Opcional. Formatos: DD/MM/YYYY ou YYYY-MM-DD")
+        
+        console.print(Panel(
+            "[bold red][ERRO][/bold red] Arquivo não encontrado em [cyan]uploads/finance.csv[/cyan]!\n\n"
+            "[bold green]Para realizar a importação de lançamentos via CSV, siga este guia:[/bold green]\n"
+            "1. Crie a pasta [yellow]uploads/[/yellow] na raiz do projeto (se não existir).\n"
+            "2. Coloque nela o seu arquivo com o nome exato [yellow]finance.csv[/yellow].\n"
+            "3. O arquivo deve ter uma linha de cabeçalho com os nomes das colunas correspondentes.\n\n"
+            "O agente classificará e mapeará as colunas dinamicamente baseado nos nomes delas.\n",
+            title="Importador Financeiro de CSV",
+            border_style="yellow"
+        ))
+        console.print(guide_table)
+        console.print(
+            "\n[bold green]Exemplo de Conteúdo Ideal (finance.csv):[/bold green]\n"
+            "[dim]"
+            "tipo,categoria,valor,descricao,vencimento\n"
+            "receita,Salário,5500.00,Salário Mensal,05/08/2026\n"
+            "despesa,Aluguel,1200.00,Aluguel do Ap,10/08/2026\n"
+            "despesa,Supermercado,450.50,,12/08/2026\n"
+            "[/dim]"
+        )
+        return
+
+    # 2. Se o arquivo existir, processa
+    console.print(f"[info] Arquivo [cyan]uploads/finance.csv[/cyan] localizado. Iniciando análise de colunas...[/info]")
+    
+    # Helpers locais para normalização
+    def normalize(s: str) -> str:
+        s_clean = unicodedata.normalize('NFKD', s).encode('ASCII', 'ignore').decode('ASCII')
+        return s_clean.strip().lower().replace("_", "").replace(" ", "").replace("-", "")
+        
+    def parse_amount(val_str: str) -> float:
+        val_clean = val_str.replace("R$", "").replace(" ", "").strip()
+        if "," in val_clean:
+            if "." in val_clean:
+                val_clean = val_clean.replace(".", "").replace(",", ".")
+            else:
+                val_clean = val_clean.replace(",", ".")
+        return float(val_clean)
+        
+    def parse_due_date(date_str: str) -> Optional[str]:
+        if not date_str.strip():
+            return None
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                dt = datetime.strptime(date_str.strip(), fmt)
+                return dt.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+        return None
+
+    # Mapeamentos esperados
+    TYPE_KEYS = {"tipo", "type", "tiporegistro", "transacao", "categoriatipo"}
+    CATEGORY_KEYS = {"categoria", "category", "grupo", "classificacao"}
+    AMOUNT_KEYS = {"valor", "val", "amount", "preco", "custo", "total"}
+    DESC_KEYS = {"descricao", "description", "detalhes", "obs", "observacao"}
+    DUE_KEYS = {"vencimento", "due_date", "datavencimento", "datavenc", "venc", "due"}
+
+    items_to_import = []
+    
+    try:
+        with open(csv_file, "r", encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            headers = next(reader, None)
+            
+            if not headers:
+                console.print("[bold red][ERRO][/bold red] O arquivo CSV está vazio.")
+                return
+                
+            # Classificação/Mapeamento das Colunas
+            col_map = {}
+            for idx, h in enumerate(headers):
+                h_norm = normalize(h)
+                if h_norm in TYPE_KEYS:
+                    col_map["type"] = idx
+                elif h_norm in CATEGORY_KEYS:
+                    col_map["category"] = idx
+                elif h_norm in AMOUNT_KEYS:
+                    col_map["amount"] = idx
+                elif h_norm in DESC_KEYS:
+                    col_map["description"] = idx
+                elif h_norm in DUE_KEYS:
+                    col_map["due_date"] = idx
+            
+            # Valida colunas obrigatórias
+            if "category" not in col_map or "amount" not in col_map:
+                console.print(
+                    "[bold red][ERRO][/bold red] Não foi possível mapear automaticamente as colunas obrigatórias!\n"
+                    f"Colunas lidas: {headers}\n"
+                    f"Mapeamento obtido: {list(col_map.keys())}\n"
+                    "Certifique-se de que o cabeçalho tem pelo menos colunas equivalentes a 'categoria' e 'valor'."
+                )
+                return
+                
+            console.print(f"[bold green][OK][/bold green] Mapeamento de colunas bem-sucedido: {list(col_map.keys())}")
+            
+            # Processamento das linhas
+            row_num = 1
+            for row in reader:
+                row_num += 1
+                if not row or not any(cell.strip() for cell in row):
+                    continue  # Pula linhas vazias
+                    
+                # Preenche valores
+                try:
+                    category = row[col_map["category"]].strip()
+                    amount_raw = row[col_map["amount"]].strip()
+                    if not category or not amount_raw:
+                        console.print(f"[warning] Linha {row_num}: Ignorada por falta de categoria ou valor.[/warning]")
+                        continue
+                        
+                    amount = parse_amount(amount_raw)
+                    
+                    # Tipo
+                    r_type = "despesa"
+                    if "type" in col_map:
+                        type_val = normalize(row[col_map["type"]])
+                        if "receita" in type_val or "income" in type_val or "entrada" in type_val:
+                            r_type = "receita"
+                    else:
+                        # Fallback inteligente: se for valor negativo, assume despesa
+                        if amount < 0:
+                            r_type = "despesa"
+                            amount = abs(amount)
+                    
+                    # Descrição
+                    description = ""
+                    if "description" in col_map:
+                        description = row[col_map["description"]].strip()
+                        
+                    # Data de vencimento
+                    due_date = None
+                    if "due_date" in col_map:
+                        due_date = parse_due_date(row[col_map["due_date"]])
+                        
+                    items_to_import.append({
+                        "type": r_type,
+                        "category": category,
+                        "amount": amount,
+                        "description": description,
+                        "due_date": due_date
+                    })
+                except Exception as row_ex:
+                    console.print(f"[warning] Linha {row_num}: Erro ao processar dados ({row_ex}). Ignorada.[/warning]")
+                    
+        # 3. Faz a inserção em lote no BD
+        if not items_to_import:
+            console.print("[yellow][Aviso][/yellow] Nenhum lançamento válido foi encontrado no arquivo CSV para importação.")
+            return
+            
+        success = db.add_financial_records_bulk(items_to_import)
+        if success:
+            num_rec = sum(1 for x in items_to_import if x["type"] == "receita")
+            num_des = sum(1 for x in items_to_import if x["type"] == "despesa")
+            
+            console.print(
+                f"[bold green][SUCESSO][/bold green] Importação concluída!\n"
+                f"- Total de lançamentos importados: [yellow]{len(items_to_import)}[/yellow]\n"
+                f"- Receitas: {num_rec} | Despesas: {num_des}"
+            )
+            
+            # 4. Move o arquivo para pasta de arquivos importados (archive)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_file = os.path.join(archive_dir, f"finance_imported_{timestamp}.csv")
+            try:
+                shutil.move(csv_file, archive_file)
+                console.print(f"[info] Arquivo CSV original movido para [cyan]uploads/archive/finance_imported_{timestamp}.csv[/cyan].[/info]")
+            except Exception as move_ex:
+                console.print(f"[warning] Não foi possível mover o arquivo importado para a pasta de arquivos arquivados: {move_ex}[/warning]")
+        else:
+            console.print("[bold red][ERRO][/bold red] Falha ao registrar lançamentos de lote no banco de dados.")
+            
+    except Exception as e:
+        console.print(f"[bold red][ERRO][/bold red] Falha crítica ao ler o arquivo CSV: {e}")
+
 def handle_slash_command(cmd_input: str) -> bool:
     """
     Processa os comandos com barra. Retorna True se o loop principal deve continuar,
@@ -158,8 +366,10 @@ def handle_slash_command(cmd_input: str) -> bool:
             "- [green]/safe[/green]: Ativa o Modo Seguro (execução apenas de comandos permitidos).\n"
             "- [green]/unsafe[/green]: Desativa o Modo Seguro (requer senha de segurança).\n"
             "- [green]/notes[/green]: Gerencia notas (lista tudo).\n"
-            "- [green]/finance[/green]: Mostra finanças do mês atual. Filtros: [green]/finance next[/green], [green]/finance deleted[/green] (inativos), [green]/finance restore <ID>[/green] (reativar), [green]/finance all[/green], [green]/finance mes=MM-YYYY[/green], [green]/finance q=busca[/green], [green]/finance delete <ID>[/green].\n"
+            "- [green]/finance[/green]: Mostra finanças do mês atual. Filtros: [green]/finance next[/green], [green]/finance deleted[/green] (inativos), [green]/finance restore <ID>[/green] (reativar), [green]/finance all[/green], [green]/finance mes=MM-YYYY[/green], [green]/finance q=busca[/green], [green]/finance delete <ID>[/green], [green]/finance import[/green] (importa CSV).\n"
             "- [green]/cron[/green]: Gerencia cronjobs (lista tudo). Use [green]/cron add <nome> <cron_expr> <prompt>[/green] para agendar.\n"
+            "- [green]/backup[/green]: Cria uma cópia de segurança criptografada com senha do banco de dados.\n"
+            "- [green]/restore [caminho][/green]: Restaura um backup criptografado (permite escolher de uma lista se o caminho for omitido).\n"
             "- [green]/exit[/green] ou [green]/quit[/green]: Encerra o assistente.",
             title="Ajuda do Meu Agente CLI"
         ))
@@ -273,6 +483,11 @@ def handle_slash_command(cmd_input: str) -> bool:
         console.print("[dim]Use o chat normal para perguntar sobre suas notas ou pesquisar por elas.[/dim]")
         
     elif command == "/finance":
+        # Permite importação via arquivo CSV: /finance import ou /finance csv
+        if len(parts) > 1 and parts[1].lower() in ["import", "csv"]:
+            handle_finance_csv_import(console)
+            return True
+
         # Permite deleção via comando: /finance delete <id>
         if len(parts) > 1 and parts[1].lower() in ["delete", "remove", "del", "rm"]:
             if len(parts) < 3 or not parts[2].isdigit():
@@ -429,6 +644,100 @@ def handle_slash_command(cmd_input: str) -> bool:
                 
             console.print(table)
             console.print("[dim]Use [green]/cron add[/green] para agendar novo subagente ou [green]/cron delete[/green] para remover.[/dim]")
+            
+    elif command == "/backup":
+        password = getpass.getpass("Defina uma senha para criptografar o backup: ")
+        if not password.strip():
+            console.print("[red]Senha de criptografia não pode ser vazia![/red]")
+            return True
+            
+        console.print("[info]Gerando dump do banco de dados...[/info]")
+        try:
+            sql_dump = db.generate_sql_dump()
+            encrypted_bytes = security.encrypt_data(sql_dump, password)
+            
+            import os
+            from datetime import datetime
+            backups_dir = os.path.join(os.getcwd(), "backups")
+            os.makedirs(backups_dir, exist_ok=True)
+            
+            filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.enc"
+            filepath = os.path.join(backups_dir, filename)
+            
+            with open(filepath, "wb") as f:
+                f.write(encrypted_bytes)
+                
+            console.print(f"[bold green][SUCESSO][/bold green] Backup criptografado gerado em: [yellow]backups/{filename}[/yellow]")
+        except Exception as e:
+            console.print(f"[bold red][ERRO][/bold red] Falha ao gerar backup: {e}")
+            
+    elif command == "/restore":
+        import os
+        backups_dir = os.path.join(os.getcwd(), "backups")
+        
+        # Determina o arquivo de backup
+        filepath = None
+        if len(parts) > 1:
+            # Caminho explícito fornecido
+            filepath = os.path.abspath(parts[1])
+        else:
+            # Lista os backups disponíveis na pasta
+            if not os.path.exists(backups_dir):
+                console.print("[yellow]Nenhum backup encontrado na pasta backups/[/yellow]")
+                return True
+                
+            files = [f for f in os.listdir(backups_dir) if f.endswith(".enc")]
+            if not files:
+                console.print("[yellow]Nenhum arquivo .enc encontrado na pasta backups/[/yellow]")
+                return True
+                
+            # Ordena os backups por data (mais recente primeiro)
+            files.sort(reverse=True)
+            
+            console.print("[bold cyan]Backups Disponíveis:[/bold cyan]")
+            for idx, f in enumerate(files, 1):
+                console.print(f" {idx}. [yellow]{f}[/yellow]")
+                
+            selection = Prompt.ask("Selecione o número do backup que deseja restaurar", default="")
+            if selection.isdigit():
+                sel_idx = int(selection) - 1
+                if 0 <= sel_idx < len(files):
+                    filepath = os.path.join(backups_dir, files[sel_idx])
+                else:
+                    console.print("[red]Seleção inválida.[/red]")
+                    return True
+            else:
+                console.print("[red]Restauração cancelada.[/red]")
+                return True
+                
+        if not filepath or not os.path.exists(filepath):
+            console.print(f"[red]Arquivo de backup não encontrado: {filepath}[/red]")
+            return True
+            
+        password = getpass.getpass("Digite a senha de descriptografia do backup: ")
+        
+        console.print(f"[info]Lendo e descriptografando backup: {os.path.basename(filepath)}...[/info]")
+        try:
+            with open(filepath, "rb") as f:
+                encrypted_bytes = f.read()
+                
+            sql_content = security.decrypt_data(encrypted_bytes, password)
+            
+            # Avisa antes de realizar a substituição
+            confirm = Confirm.ask(
+                "[bold red][AVISO][/bold red] A restauração irá apagar todos os dados atuais das tabelas "
+                "para aplicar o backup. Deseja prosseguir?", default=False
+            )
+            
+            if confirm:
+                if db.restore_sql_dump(sql_content):
+                    console.print("[bold green][SUCESSO][/bold green] Banco de dados restaurado com sucesso!")
+                else:
+                    console.print("[bold red][ERRO][/bold red] Falha na restauração do dump SQL no banco de dados.")
+            else:
+                console.print("[yellow]Restauração cancelada pelo usuário.[/yellow]")
+        except Exception as e:
+            console.print(f"[bold red][ERRO][/bold red] Senha incorreta ou arquivo de backup inválido/corrompido: {e}")
             
     else:
         console.print(f"[bold red]Comando inválido:[/bold red] {command}. Digite [green]/help[/green] para ver comandos válidos.")
