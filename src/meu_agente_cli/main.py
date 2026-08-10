@@ -353,6 +353,188 @@ def handle_finance_csv_import(console: Console) -> None:
     except Exception as e:
         console.print(f"[bold red][ERRO][/bold red] Falha crítica ao ler o arquivo CSV: {e}")
 
+def handle_finance_card_command(parts: list, console: Console) -> None:
+    """Processa subcomandos relacionados a cartões de crédito."""
+    if len(parts) < 3:
+        console.print(
+            "[red]Uso correto dos comandos de cartão de crédito:\n"
+            "- [green]/finance card add <nome> <dia_fechamento> <dia_vencimento>[/green]\n"
+            "- [green]/finance card list[/green]\n"
+            "- [green]/finance card buy <cartao> <categoria> <valor_total> <parcelas> <descricao> [data_compra][/green][/red]"
+        )
+        return
+
+    subcmd = parts[2].lower()
+    
+    if subcmd == "add":
+        if len(parts) < 6:
+            console.print("[red]Uso correto: /finance card add <nome> <dia_fechamento> <dia_vencimento>[/red]")
+            return
+        name = parts[3].strip()
+        try:
+            closing_day = int(parts[4])
+            due_day = int(parts[5])
+            if not (1 <= closing_day <= 31) or not (1 <= due_day <= 31):
+                raise ValueError("Os dias devem estar entre 1 e 31.")
+        except ValueError as val_ex:
+            console.print(f"[red]Dias inválidos: {val_ex}. Forneça inteiros válidos de 1 a 31.[/red]")
+            return
+            
+        if db.save_credit_card(name, closing_day, due_day):
+            console.print(f"[bold green][SUCESSO][/bold green] Cartão '[yellow]{name}[/yellow]' cadastrado com sucesso! Fechamento: dia {closing_day} | Vencimento: dia {due_day}.")
+        else:
+            console.print("[red]Erro ao cadastrar cartão de crédito.[/red]")
+            
+    elif subcmd == "list":
+        cards = db.get_credit_cards().get("cartoes", {})
+        if not cards:
+            console.print("[yellow]Nenhum cartão de crédito cadastrado. Use [green]/finance card add[/green] para cadastrar.[/yellow]")
+            return
+            
+        table = Table(title="Cartões de Crédito Cadastrados")
+        table.add_column("Nome do Cartão", style="magenta")
+        table.add_column("Dia Fechamento", justify="center", style="cyan")
+        table.add_column("Dia Vencimento", justify="center", style="cyan")
+        
+        for name, info in cards.items():
+            table.add_row(name, str(info["closing_day"]), str(info["due_day"]))
+            
+        console.print(table)
+        
+    elif subcmd == "buy":
+        if len(parts) < 8:
+            console.print("[red]Uso correto: /finance card buy <cartao> <categoria> <valor_total> <parcelas> <descricao> [data_compra][/red]")
+            return
+            
+        card_name = parts[3].strip()
+        cards_config = db.get_credit_cards().get("cartoes", {})
+        
+        # Procura o cartão de forma case-insensitive
+        card_info = None
+        matched_card_name = ""
+        for name, info in cards_config.items():
+            if name.lower() == card_name.lower():
+                card_info = info
+                matched_card_name = name
+                break
+                
+        if not card_info:
+            console.print(f"[red]Cartão '{card_name}' não cadastrado! Use [green]/finance card list[/green] para ver os disponíveis.[/red]")
+            return
+            
+        category = parts[4].strip()
+        
+        try:
+            # Limpa valor total (ex: R$ 150,50 -> 150.50)
+            def parse_amount(val_str: str) -> float:
+                val_clean = val_str.replace("R$", "").replace(" ", "").strip()
+                if "," in val_clean:
+                    if "." in val_clean:
+                        val_clean = val_clean.replace(".", "").replace(",", ".")
+                    else:
+                        val_clean = val_clean.replace(",", ".")
+                return float(val_clean)
+                
+            total_amount = parse_amount(parts[5])
+            installments = int(parts[6])
+            if total_amount <= 0 or installments <= 0:
+                raise ValueError("Valor e parcelas devem ser maiores que zero.")
+        except ValueError as parse_ex:
+            console.print(f"[red]Erro de validação: {parse_ex}. Verifique o valor e parcelas.[/red]")
+            return
+            
+        # Pega descrição e data de compra opcional no final
+        remaining = parts[7:]
+        buy_date_str = None
+        from datetime import datetime
+        
+        if len(remaining) > 1:
+            possible_date = remaining[-1]
+            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+                try:
+                    datetime.strptime(possible_date, fmt)
+                    buy_date_str = possible_date
+                    remaining = remaining[:-1]
+                    break
+                except ValueError:
+                    continue
+                    
+        description = " ".join(remaining).strip()
+        if not description:
+            description = f"Compra no cartão {matched_card_name}"
+            
+        buy_date = datetime.now()
+        if buy_date_str:
+            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+                try:
+                    buy_date = datetime.strptime(buy_date_str, fmt)
+                    break
+                except ValueError:
+                    pass
+                    
+        closing_day = card_info["closing_day"]
+        due_day = card_info["due_day"]
+        
+        # Determina o mês inicial da fatura
+        if buy_date.day >= closing_day:
+            if buy_date.month == 12:
+                first_due_month = 1
+                first_due_year = buy_date.year + 1
+            else:
+                first_due_month = buy_date.month + 1
+                first_due_year = buy_date.year
+        else:
+            first_due_month = buy_date.month
+            first_due_year = buy_date.year
+            
+        # Divide o valor com arredondamento correto
+        base_inst_val = round(total_amount / installments, 2)
+        diff = round(total_amount - (base_inst_val * installments), 2)
+        
+        records_to_insert = []
+        
+        for i in range(1, installments + 1):
+            inst_amount = base_inst_val
+            if i == 1:
+                inst_amount = round(base_inst_val + diff, 2)
+                
+            offset_months = i - 1
+            due_month = first_due_month + offset_months
+            due_year = first_due_year
+            
+            while due_month > 12:
+                due_month -= 12
+                due_year += 1
+                
+            import calendar
+            max_days = calendar.monthrange(due_year, due_month)[1]
+            adjusted_due_day = min(due_day, max_days)
+            
+            due_date = datetime(due_year, due_month, adjusted_due_day).date()
+            inst_desc = f"[{matched_card_name} {i}/{installments}] {description}"
+            
+            records_to_insert.append({
+                "type": "despesa",
+                "category": category,
+                "amount": inst_amount,
+                "description": inst_desc,
+                "due_date": due_date.strftime("%Y-%m-%d")
+            })
+            
+        success = db.add_financial_records_bulk(records_to_insert)
+        if success:
+            console.print(
+                f"[bold green][SUCESSO][/bold green] Lançamento de cartão registrado!\n"
+                f"- Cartão: [yellow]{matched_card_name}[/yellow] | Total: [green]R$ {total_amount:.2f}[/green]\n"
+                f"- Parcelamento: [cyan]{installments}x[/cyan]\n"
+                f"- Vencimento inicial: [white]{records_to_insert[0]['due_date']}[/white]"
+            )
+        else:
+            console.print("[red]Erro ao salvar lançamentos parcelados no banco de dados.[/red]")
+            
+    else:
+        console.print(f"[red]Subcomando de cartão inválido: '{subcmd}'. Opções: add, list, buy.[/red]")
+
 def handle_slash_command(cmd_input: str) -> bool:
     """
     Processa os comandos com barra. Retorna True se o loop principal deve continuar,
@@ -377,7 +559,7 @@ def handle_slash_command(cmd_input: str) -> bool:
             "- [green]/safe[/green]: Ativa o Modo Seguro (execução apenas de comandos permitidos).\n"
             "- [green]/unsafe[/green]: Desativa o Modo Seguro (requer senha de segurança).\n"
             "- [green]/notes[/green]: Gerencia notas (lista tudo).\n"
-            "- [green]/finance[/green]: Mostra finanças do mês atual. Filtros: [green]/finance next[/green], [green]/finance deleted[/green] (inativos), [green]/finance restore <ID>[/green] (reativar), [green]/finance all[/green], [green]/finance mes=MM-YYYY[/green], [green]/finance q=busca[/green], [green]/finance delete <ID>[/green], [green]/finance import[/green] (importa CSV).\n"
+            "- [green]/finance[/green]: Mostra finanças do mês atual. Filtros: [green]/finance next[/green], [green]/finance deleted[/green], [green]/finance restore <ID>[/green], [green]/finance all[/green], [green]/finance mes=MM-YYYY[/green], [green]/finance q=busca[/green], [green]/finance delete <ID>[/green], [green]/finance import[/green], [green]/finance card[/green] (cartão de crédito).\n"
             "- [green]/cron[/green]: Gerencia cronjobs (lista tudo). Use [green]/cron add <nome> <cron_expr> <prompt>[/green] para agendar.\n"
             "- [green]/backup[/green]: Cria uma cópia de segurança criptografada com senha do banco de dados.\n"
             "- [green]/restore [caminho][/green]: Restaura um backup criptografado (permite escolher de uma lista se o caminho for omitido).\n"
@@ -494,6 +676,11 @@ def handle_slash_command(cmd_input: str) -> bool:
         console.print("[dim]Use o chat normal para perguntar sobre suas notas ou pesquisar por elas.[/dim]")
         
     elif command == "/finance":
+        # Permite gerenciamento de cartões de crédito: /finance card
+        if len(parts) > 1 and parts[1].lower() in ["card", "cartao"]:
+            handle_finance_card_command(parts, console)
+            return True
+
         # Permite importação via arquivo CSV: /finance import ou /finance csv
         if len(parts) > 1 and parts[1].lower() in ["import", "csv"]:
             handle_finance_csv_import(console)

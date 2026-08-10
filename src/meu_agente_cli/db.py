@@ -747,3 +747,28 @@ def restore_sql_dump(sql_content: str) -> bool:
     except Exception as e:
         print(f"[ERROR] Falha ao restaurar dump SQL: {e}", file=sys.stderr)
         return False
+
+def get_credit_cards() -> dict:
+    """Retorna o dicionário de cartões de crédito configurados a partir de settings."""
+    import json
+    try:
+        val = get_setting("credit_cards_config")
+        if val:
+            return json.loads(val)
+    except Exception:
+        pass
+    return {"cartoes": {}}
+
+def save_credit_card(name: str, closing_day: int, due_day: int) -> bool:
+    """Cadastra ou atualiza um cartão de crédito no settings."""
+    import json
+    try:
+        cards = get_credit_cards()
+        cards["cartoes"][name] = {
+            "closing_day": closing_day,
+            "due_day": due_day
+        }
+        return set_setting("credit_cards_config", json.dumps(cards, ensure_ascii=False))
+    except Exception as e:
+        print(f"[ERROR] Erro ao salvar cartão de crédito no banco: {e}", file=sys.stderr)
+        return False

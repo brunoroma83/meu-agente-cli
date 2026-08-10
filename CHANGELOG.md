@@ -9,6 +9,7 @@ O formato é baseado no [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 ## [Unreleased]
 
 ### Added
+- **Módulo de Cartões de Crédito**: Subcomando `/finance card` adicionado para cadastrar regras de faturamento de cartões (fechamento e vencimento) e lançar despesas à vista ou parceladas de forma inteligente (corrigindo arredondamentos de dízimas e projetando datas de faturas futuras).
 - **Limpeza de Tela e Banner Informativo**: Inicialização aprimorada que limpa o terminal (`console.clear()`) e exibe um painel de boas-vindas completo citando a versão (`v1.1.0`), última data de modificação e lista de principais recursos do agente.
 - **Backup e Restauração Criptografados**: Novos comandos `/backup` e `/restore` para exportação e importação seguras de toda a base de dados (tabelas e parâmetros) em código Python puro (sem dependência de binários externos), protegendo os dados com criptografia AES-256 (via Fernet com PBKDF2) e compactação Gzip.
 - **Suporte a Containerização Docker**: Adicionados arquivos `Dockerfile` e `docker-compose.yml` para empacotamento completo do agente e do banco PostgreSQL isolado em containers.
