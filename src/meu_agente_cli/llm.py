@@ -8,6 +8,9 @@ from pathlib import Path
 
 CURRENT_DIR = Path(__file__).parent.resolve()
 
+# Timeout em segundos para chamadas de LLM (aumentado para processamento robusto de documentos e imagens)
+LLM_TIMEOUT = 300.0
+
 def build_system_prompt() -> str:
     """Constrói dinamicamente o SYSTEM_PROMPT carregando dados dos arquivos de configuração JSON."""
     try:
@@ -90,9 +93,24 @@ def chat_completion(
     # Sanitiza todas as mensagens enviadas para a LLM, prevenindo erros de surrogate no payload JSON
     payload_messages = []
     for m in messages:
+        content = m["content"]
+        if isinstance(content, list):
+            cleaned_content = []
+            for item in content:
+                if isinstance(item, dict):
+                    cleaned_item = item.copy()
+                    if "text" in cleaned_item:
+                        cleaned_item["text"] = clean_string(cleaned_item["text"])
+                    cleaned_content.append(cleaned_item)
+                else:
+                    cleaned_content.append(item)
+            content = cleaned_content
+        else:
+            content = clean_string(content)
+            
         payload_messages.append({
             "role": m["role"],
-            "content": clean_string(m["content"])
+            "content": content
         })
         
     if not has_system:
@@ -109,7 +127,7 @@ def chat_completion(
         
         def stream_generator():
             try:
-                with httpx.stream("POST", f"{url}/v1/chat/completions", json=payload, timeout=60.0) as r:
+                with httpx.stream("POST", f"{url}/v1/chat/completions", json=payload, timeout=LLM_TIMEOUT) as r:
                     if r.status_code != 200:
                         yield f"[ERROR: LM Studio returned status code {r.status_code}]"
                         return
@@ -134,7 +152,7 @@ def chat_completion(
     else:
         payload["stream"] = False
         try:
-            res = httpx.post(f"{url}/v1/chat/completions", json=payload, timeout=60.0)
+            res = httpx.post(f"{url}/v1/chat/completions", json=payload, timeout=LLM_TIMEOUT)
             if res.status_code == 200:
                 raw_content = res.json()["choices"][0]["message"].get("content", "")
                 return clean_string(raw_content)

@@ -3,6 +3,7 @@ import subprocess
 import time
 import sys
 import getpass
+import json
 from datetime import datetime
 from typing import List, Tuple, Dict, Any, Optional
 import psycopg
@@ -297,10 +298,14 @@ def set_chat_history_limit(limit: int) -> bool:
     return set_setting("chat_history_limit", str(limit))
 
 # 2. Histórico de Conversa (Chat History)
-def save_chat_message(sender: str, message: str) -> bool:
-    """Salva uma mensagem do histórico no banco de dados."""
+def save_chat_message(sender: str, message: Any) -> bool:
+    """Salva uma mensagem do histórico no banco de dados (suporta strings ou estruturas multimodais JSON)."""
     try:
-        msg_clean = clean_string(message)
+        if isinstance(message, (list, dict)):
+            msg_clean = json.dumps(message, ensure_ascii=False)
+        else:
+            msg_clean = clean_string(str(message))
+            
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute(
@@ -314,8 +319,8 @@ def save_chat_message(sender: str, message: str) -> bool:
         print(f"[ERROR] Erro ao salvar mensagem no histórico: {e}", file=sys.stderr)
         return False
 
-def get_chat_history(limit: int = 20) -> List[Tuple[str, str]]:
-    """Retorna as últimas mensagens do histórico de chat."""
+def get_chat_history(limit: int = 20) -> List[Tuple[str, Any]]:
+    """Retorna as últimas mensagens do histórico de chat (desfazendo serialização JSON para multimodalidade)."""
     try:
         conn = get_connection()
         with conn.cursor() as cur:
@@ -325,8 +330,19 @@ def get_chat_history(limit: int = 20) -> List[Tuple[str, str]]:
             )
             rows = cur.fetchall()
         conn.close()
-        # Retorna na ordem cronológica (mais antiga para mais recente)
-        return [(r[0], r[1]) for r in reversed(rows)]
+        
+        # Desfaz serialização JSON se o conteúdo for uma estrutura de lista ou dict de multimodalidade
+        history = []
+        for r in reversed(rows):
+            sender, msg = r[0], r[1]
+            if msg.startswith("[") or msg.startswith("{"):
+                try:
+                    msg = json.loads(msg)
+                except Exception:
+                    pass
+            history.append((sender, msg))
+            
+        return history
     except Exception as e:
         print(f"[ERROR] Erro ao ler histórico: {e}", file=sys.stderr)
         return []

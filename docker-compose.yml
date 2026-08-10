@@ -26,6 +26,30 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway" # Resolve o IP do Windows Host dentro do container
 
+  telegram-bot:
+    build: .
+    container_name: meu-agente-telegram
+    command: uv run python3 -m meu_agente_cli.telegram_app
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=meu_agente_db
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres_seguro
+      - LM_STUDIO_URL=http://host.docker.internal:1234
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_AUTHORIZED_USER_IDS=${TELEGRAM_AUTHORIZED_USER_IDS}
+    volumes:
+      - agent_data:/root/.config/meu-agente-cli
+      - .:/app
+      - /app/.venv
+    depends_on:
+      db:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
   db:
     image: postgres:15-alpine
     container_name: meu-agente-db
