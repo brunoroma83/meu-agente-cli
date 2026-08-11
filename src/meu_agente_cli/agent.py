@@ -205,6 +205,8 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
                     return f"Erro: O comando '{cmd}' não está na whitelist e a execução remota de comandos não-seguros foi bloqueada."
         elif tool_name == "calculator_tool":
             return tools.calculator_tool(**args)
+        elif tool_name == "invest_tool":
+            return tools.invest_tool(**args)
         else:
             # Tenta carregar a ferramenta dinamicamente do custom_tools.json
             from pathlib import Path
@@ -252,7 +254,7 @@ def process_agent_turn_silent(user_input: Any) -> str:
         messages.append({"role": sender, "content": msg})
     messages.append({"role": "user", "content": user_input})
     
-    max_turns = 5
+    max_turns = 10
     for turn in range(max_turns):
         # Conversa síncrona com o LLM (sem streaming)
         response_text = llm.chat_completion(model, messages, stream=False)

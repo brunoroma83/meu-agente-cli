@@ -233,6 +233,25 @@ def init_database() -> bool:
                     active BOOLEAN DEFAULT TRUE
                 )
             """)
+            # 6. Tabela Investimentos
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS investimentos (
+                    id SERIAL PRIMARY KEY,
+                    nome_titulo VARCHAR(100) NOT NULL,
+                    nome_banco VARCHAR(100) NOT NULL,
+                    tipo_investimento VARCHAR(50) NOT NULL,
+                    quantidade NUMERIC(12, 2),
+                    valor_investido NUMERIC(12, 2) NOT NULL,
+                    data_inicio DATE NOT NULL,
+                    valor_atual NUMERIC(12, 2),
+                    data_ultima_atualizacao DATE,
+                    data_venda DATE,
+                    lucro_prejuizo NUMERIC(12, 2),
+                    percentual_lucro_prejuizo NUMERIC(12, 2),
+                    status VARCHAR(20) DEFAULT 'active',
+                    active BOOLEAN DEFAULT TRUE
+                )
+            """)
             
             # Migrations para bases de dados existentes
             cur.execute("ALTER TABLE user_notes ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")

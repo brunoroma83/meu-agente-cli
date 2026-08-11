@@ -305,7 +305,9 @@ def handle_incoming_message(message):
         # Conversa normal com o Agente (Pensamento + Execução Silenciosa de Ferramentas)
         bot.send_chat_action(message.chat.id, 'typing')
         try:
-            response = agent.process_agent_turn_silent(text)
+            telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
+            telegram_prompt = f"{text}{telegram_instruction}"
+            response = agent.process_agent_turn_silent(telegram_prompt)
             reply_formatted(message, response)
         except Exception as e:
             bot.reply_to(message, f"Erro no processamento da conversa: {e}")
@@ -427,12 +429,14 @@ def handle_document_upload(message):
             
         caption = message.caption.strip() if message.caption else "Analise e resuma o conteúdo deste arquivo."
         
+        telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
         user_prompt = (
             f"[Arquivo Anexado: {file_name}]\n"
             f"--- Início do Conteúdo do Arquivo ---\n"
             f"{text_content}\n"
             f"--- Fim do Conteúdo do Arquivo ---\n\n"
             f"Instrução do Usuário: {caption}"
+            f"{telegram_instruction}"
         )
         
         bot.reply_to(message, f"📖 Arquivo `{file_name}` processado ({len(text_content)} caracteres). Enviando para análise da inteligência artificial...")
@@ -465,9 +469,10 @@ def handle_photo_upload(message):
         # Legenda/pergunta do usuário
         caption = message.caption.strip() if message.caption else "O que está nesta imagem? Descreva e analise em detalhes."
         
+        telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
         # Monta a estrutura da mensagem multimodal
         multimodal_prompt = [
-            {"type": "text", "text": caption},
+            {"type": "text", "text": f"{caption}{telegram_instruction}"},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_str}"}}
         ]
         
