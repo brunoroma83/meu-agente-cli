@@ -1,8 +1,11 @@
 import sys
 import os
 import re
+import time
+import subprocess
 import telebot
 from rich.console import Console
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # Adiciona o diretório raiz ao path para importação
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -21,6 +24,11 @@ if not token:
     token = "123456:dummy_token_for_import_validation"
 
 bot = telebot.TeleBot(token)
+
+# Variáveis globais para gerenciar estados temporários de áudio
+pending_transcriptions = {}  # {chat_id: {"text": str, "audio_path": str}}
+user_states = {}  # {chat_id: str}
+
 
 def is_authorized(message) -> bool:
     """Verifica se o chat ID remetente está na lista de usuários autorizados."""
@@ -50,6 +58,10 @@ def format_help_telegram() -> str:
         "• `/finance card add <nome> <fechamento> <vencimento>` - Cadastra cartão.\n"
         "• `/finance card buy <cartao> <categoria> <valor> <parcelas> <descricao> [data]` - Lança despesa no cartão.\n"
         "• `/cron` - Lista tarefas agendadas em segundo plano.\n"
+        "• `/reunioes` - Lista reuniões e transcrições de áudio salvas.\n"
+        "  └─ _Visualizar:_ `/reunioes <id>` para ver os detalhes completos.\n"
+        "• `/transcrever` - Lista arquivos de áudio em `uploads/` para transcrição.\n"
+        "  └─ _Transcrever:_ `/transcrever <nome_do_arquivo>` para iniciar.\n"
         "• `/backup` - Cria uma cópia de segurança criptografada do banco.\n"
         "• `/restore` - Restaura um backup criptografado.\n"
     )
@@ -239,6 +251,11 @@ def handle_incoming_message(message):
     if not text:
         return
         
+    # Verifica se o usuário estava aguardando enviar instrução personalizada para áudio
+    if user_states.get(message.chat.id) == "waiting_for_custom_instruction":
+        process_custom_audio_instruction(message, text)
+        return
+        
     # Tratamento de Comandos Especiais com Barra
     if text.startswith("/"):
         if text in ["/exit", "/quit"]:
@@ -260,6 +277,12 @@ def handle_incoming_message(message):
                 return
             elif cmd == "/cron" and len(parts) == 1:
                 bot.reply_to(message, format_cron_telegram(), parse_mode="Markdown")
+                return
+            elif cmd == "/reunioes":
+                handle_reunioes_command(message, parts)
+                return
+            elif cmd == "/transcrever":
+                handle_transcrever_command(message, parts)
                 return
             elif cmd == "/finance":
                 # Verifica se é uma listagem/filtro normal ou uma ação (delete, restore, import, card add/buy)
@@ -311,6 +334,473 @@ def handle_incoming_message(message):
             reply_formatted(message, response)
         except Exception as e:
             bot.reply_to(message, f"Erro no processamento da conversa: {e}")
+
+def escape_markdown(text: str) -> str:
+    """Escapa caracteres especiais do Markdown V1 do Telegram para evitar quebras de parser."""
+    if not text:
+        return text
+    for char in ['_', '*', '`']:
+        text = text.replace(char, f"\\{char}")
+    return text
+
+# Helper functions for Audio processing & History
+def process_custom_audio_instruction(message, instruction):
+    chat_id = message.chat.id
+    user_states.pop(chat_id, None)  # Limpa o estado
+    
+    trans_data = pending_transcriptions.get(chat_id)
+    if not trans_data:
+        bot.reply_to(message, "⚠️ Nenhuma transcrição ativa encontrada. Envie o áudio novamente.")
+        return
+        
+    transcription = trans_data["text"]
+    audio_path = trans_data["audio_path"]
+    
+    bot.send_chat_action(chat_id, 'typing')
+    bot.reply_to(message, "✍️ Processando transcrição com sua instrução personalizada...")
+    
+    try:
+        telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
+        prompt = (
+            f"Processar a seguinte transcrição de áudio seguindo a instrução: {instruction}\n\n"
+            f"Transcrição:\n{transcription}"
+            f"{telegram_instruction}"
+        )
+        response = agent.process_agent_turn_silent(prompt)
+        
+        # Salva permanentemente no banco
+        db.save_audio_transcription(chat_id, audio_path, transcription, f"Instrução personalizada: {instruction}", response)
+        
+        reply_formatted(message, response)
+        # Limpa transcrição temporária
+        pending_transcriptions.pop(chat_id, None)
+    except Exception as e:
+        bot.reply_to(message, f"❌ Erro ao processar áudio: {e}")
+
+def handle_transcrever_command(message, parts):
+    chat_id = message.chat.id
+    uploads_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "uploads"))
+    os.makedirs(uploads_dir, exist_ok=True)
+    
+    allowed_exts = {".mp3", ".wav", ".m4a", ".ogg", ".oga", ".aac", ".flac", ".wma"}
+    
+    # Lista arquivos
+    files = []
+    if os.path.exists(uploads_dir):
+        files = [f for f in os.listdir(uploads_dir) if os.path.isfile(os.path.join(uploads_dir, f)) and os.path.splitext(f)[1].lower() in allowed_exts]
+        
+    if len(parts) == 1:
+        if not files:
+            bot.reply_to(
+                message,
+                "📂 *Pasta de uploads vazia*\n\n"
+                "Nenhum arquivo de áudio foi encontrado no diretório `uploads/`.\n"
+                "Coloque arquivos de áudio manualmente no servidor e digite `/transcrever <nome_do_arquivo>`.",
+                parse_mode="Markdown"
+            )
+            return
+            
+        linhas = ["📂 *Arquivos de áudio disponíveis para transcrição:*"]
+        for f in files:
+            linhas.append(f"• `{f}`")
+        linhas.append("\n💡 Digite `/transcrever <nome_do_arquivo>` para iniciar o processamento.")
+        bot.reply_to(message, "\n".join(linhas), parse_mode="Markdown")
+        return
+        
+    # Processamento do arquivo especificado
+    filename = " ".join(parts[1:])  # Para o caso do nome ter espaços
+    file_path = os.path.join(uploads_dir, filename)
+    
+    if not os.path.exists(file_path):
+        bot.reply_to(message, f"❌ O arquivo `{filename}` não foi encontrado em `uploads/`.")
+        return
+        
+    bot.send_chat_action(chat_id, 'record_audio')
+    bot.reply_to(message, f"📥 Iniciando o processamento do arquivo `{filename}`... Isso pode levar alguns minutos dependendo do tamanho.")
+    
+    try:
+        # Cria diretório de histórico
+        archive_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "uploads", "archive", "audio"))
+        os.makedirs(archive_dir, exist_ok=True)
+        
+        timestamp = int(time.time())
+        ext = os.path.splitext(filename)[1]
+        
+        original_filename = f"{timestamp}_{filename}"
+        original_filepath = os.path.join(archive_dir, original_filename)
+        
+        wav_filename = f"{timestamp}_{os.path.splitext(filename)[0]}.wav"
+        wav_filepath = os.path.join(archive_dir, wav_filename)
+        
+        # Copia o arquivo original para a pasta de histórico
+        import shutil
+        shutil.copy(file_path, original_filepath)
+        
+        # Converte para WAV com ffmpeg
+        cmd = ["ffmpeg", "-y", "-i", original_filepath, "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", wav_filepath]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        if result.returncode != 0:
+            error_msg = result.stderr.decode('utf-8', errors='ignore')
+            print(f"[ERROR] Falha na conversão de áudio pelo ffmpeg: {error_msg}")
+            bot.reply_to(message, f"❌ Erro ao converter o arquivo `{filename}` para WAV. Verifique o formato.")
+            return
+            
+        # Faz a transcrição
+        from meu_agente_cli.speech_to_text import transcrever_arquivo_audio
+        
+        bot.send_chat_action(chat_id, 'typing')
+        transcription = transcrever_arquivo_audio(wav_filepath)
+        
+        if not transcription.strip() or transcription.startswith("["):
+            bot.reply_to(message, f"⚠️ Não consegui extrair palavras compreensíveis do arquivo `{filename}`.\n\nRetorno: {transcription or 'Áudio em silêncio'}")
+            return
+            
+        # Salva no estado temporário
+        pending_transcriptions[chat_id] = {
+            "text": transcription,
+            "audio_path": wav_filepath
+        }
+        
+        # Monta teclado inline
+        markup = InlineKeyboardMarkup()
+        btn_simple = InlineKeyboardButton("📝 Resumo Simples", callback_data="audio_action:simple")
+        btn_detailed = InlineKeyboardButton("📌 Pontos & Plano de Ação", callback_data="audio_action:detailed")
+        btn_custom = InlineKeyboardButton("✍️ Outra Instrução...", callback_data="audio_action:custom")
+        
+        markup.row(btn_simple, btn_detailed)
+        markup.row(btn_custom)
+        
+        # Resposta
+        transcription_escaped = escape_markdown(transcription[:1500])
+        msg_text = (
+            f"🎙️ *Áudio Transcrito com Sucesso (`{filename}`):*\n\n"
+            f"_\"{transcription_escaped}... (exibindo primeiros 1500 caracteres)\"_\n\n"
+            f"Escolha o que deseja fazer com esta transcrição:"
+        )
+        try:
+            bot.reply_to(message, msg_text, reply_markup=markup, parse_mode="Markdown")
+        except Exception as e:
+            print(f"[Warning] Falha ao renderizar Markdown em /transcrever response: {e}")
+            try:
+                msg_text_plain = (
+                    f"🎙️ Áudio Transcrito com Sucesso ({filename}):\n\n"
+                    f"\"{transcription[:1500]}... (exibindo primeiros 1500 caracteres)\"\n\n"
+                    f"Escolha o que deseja fazer com esta transcrição:"
+                )
+                bot.reply_to(message, msg_text_plain, reply_markup=markup)
+            except Exception as e_fallback:
+                print(f"[ERROR] Falha crítica ao enviar resposta de transcrição: {e_fallback}")
+        
+    except Exception as e:
+        print(f"[ERROR] Falha geral ao transcrever arquivo manual: {e}")
+        bot.reply_to(message, f"❌ Erro no processamento do arquivo de áudio: {e}")
+
+def handle_reunioes_command(message, parts):
+    chat_id = message.chat.id
+    if len(parts) == 1:
+        # Listagem ativa
+        rows = db.list_audio_transcriptions(chat_id)
+        if not rows:
+            bot.reply_to(message, "📂 *Histórico de Reuniões*\n\nNenhuma transcrição de áudio/reunião ativa encontrada no banco.")
+            return
+            
+        linhas = ["📂 *Gravações e Reuniões Salvas:*"]
+        for r_id, audio_path, transcription, user_prompt, created_at in rows:
+            dt_str = created_at.strftime("%d/%m/%Y %H:%M")
+            trecho = transcription[:65] + "..." if len(transcription) > 65 else transcription
+            linhas.append(f"• *#{r_id}* ({dt_str}) | Foco: _{user_prompt}_\n  _\"{trecho}\"_")
+            
+        linhas.append("\n_Use `/reunioes <id>` para ver os detalhes, `/reunioes delete <id>` para inativar, ou `/reunioes deleted` para ver inativas._")
+        bot.reply_to(message, "\n".join(linhas), parse_mode="Markdown")
+        
+    elif len(parts) >= 2:
+        subcmd = parts[1].lower()
+        
+        if subcmd == "deleted":
+            # Listagem de deletadas
+            rows = db.list_deleted_audio_transcriptions(chat_id)
+            if not rows:
+                bot.reply_to(message, "📂 *Histórico de Reuniões Inativas*\n\nNenhuma reunião inativada encontrada.")
+                return
+                
+            linhas = ["📂 *Reuniões Inativadas (Soft Deleted):*"]
+            for r_id, audio_path, transcription, user_prompt, created_at in rows:
+                dt_str = created_at.strftime("%d/%m/%Y %H:%M")
+                trecho = transcription[:65] + "..." if len(transcription) > 65 else transcription
+                linhas.append(f"• *#{r_id}* ({dt_str}) | Foco: _{user_prompt}_\n  _\"{trecho}\"_")
+                
+            linhas.append("\n_Use `/reunioes restore <id>` para reativar uma reunião._")
+            bot.reply_to(message, "\n".join(linhas), parse_mode="Markdown")
+            return
+            
+        elif subcmd == "delete":
+            if len(parts) < 3:
+                bot.reply_to(message, "❌ Por favor, especifique o ID. Exemplo: `/reunioes delete 5`.")
+                return
+            try:
+                doc_id = int(parts[2])
+            except ValueError:
+                bot.reply_to(message, "❌ ID inválido. Use `/reunioes delete <id>` com o número do registro.")
+                return
+                
+            # Verifica se existe
+            row = db.get_audio_transcription_by_id(chat_id, doc_id)
+            if not row:
+                bot.reply_to(message, f"❌ Reunião com ID *#{doc_id}* não encontrada.")
+                return
+                
+            if db.delete_audio_transcription(chat_id, doc_id):
+                bot.reply_to(message, f"🗑️ Reunião *#{doc_id}* foi inativada com sucesso (Soft Deleted).\n\nVocê pode recuperá-la digitando `/reunioes restore {doc_id}`.")
+            else:
+                bot.reply_to(message, f"❌ Falha ao inativar reunião *#{doc_id}*.")
+            return
+            
+        elif subcmd == "restore":
+            if len(parts) < 3:
+                bot.reply_to(message, "❌ Por favor, especifique o ID. Exemplo: `/reunioes restore 5`.")
+                return
+            try:
+                doc_id = int(parts[2])
+            except ValueError:
+                bot.reply_to(message, "❌ ID inválido. Use `/reunioes restore <id>` com o número do registro.")
+                return
+                
+            # Verifica se existe
+            row = db.get_audio_transcription_by_id(chat_id, doc_id)
+            if not row:
+                bot.reply_to(message, f"❌ Reunião com ID *#{doc_id}* não encontrada.")
+                return
+                
+            if db.restore_audio_transcription(chat_id, doc_id):
+                bot.reply_to(message, f"✅ Reunião *#{doc_id}* foi reativada com sucesso!")
+            else:
+                bot.reply_to(message, f"❌ Falha ao reativar reunião *#{doc_id}*.")
+            return
+            
+        else:
+            # Caso seja `/reunioes <id>`
+            try:
+                doc_id = int(parts[1])
+            except ValueError:
+                bot.reply_to(message, "❌ Subcomando ou ID inválido. Use `/reunioes`, `/reunioes <id>`, `/reunioes delete <id>`, ou `/reunioes restore <id>`.")
+                return
+                
+            row = db.get_audio_transcription_by_id(chat_id, doc_id)
+            if not row:
+                bot.reply_to(message, f"❌ Registro de reunião com ID *#{doc_id}* não encontrado.")
+                return
+                
+            r_id, audio_path, transcription, user_prompt, llm_response, created_at, active = row
+            dt_str = created_at.strftime("%d/%m/%Y %H:%M")
+            status_text = "🟢 Ativa" if active else "🔴 Inativa (Soft Deleted)"
+            
+            # Escapa campos de entrada do usuário para evitar quebra de Markdown
+            user_prompt_escaped = escape_markdown(user_prompt)
+            transcription_escaped = escape_markdown(transcription)
+            
+            texto_completo = (
+                f"📅 *Detalhes da Reunião #{r_id}* ({dt_str})\n"
+                f"📊 *Status:* {status_text}\n"
+                f"🔊 *Áudio:* `{os.path.basename(audio_path)}`\n"
+                f"🎯 *Solicitação:* _{user_prompt_escaped}_\n\n"
+                f"─────────────────────\n"
+                f"🎙️ *Transcrição Completa:*\n"
+                f"_{transcription_escaped}_\n\n"
+                f"─────────────────────\n"
+                f"🤖 *Resultado / Resumo:*\n\n"
+                f"{llm_response}"
+            )
+            
+            # Envia de forma estruturada, tratando possíveis erros de renderização de Markdown
+            try:
+                if len(texto_completo) > 4000:
+                    parts_txt = [texto_completo[i:i+3900] for i in range(0, len(texto_completo), 3900)]
+                    for pt in parts_txt:
+                        bot.send_message(chat_id, pt, parse_mode="Markdown")
+                else:
+                    bot.reply_to(message, texto_completo, parse_mode="Markdown")
+            except Exception as e:
+                print(f"[Warning] Falha ao renderizar Markdown em /reunioes {doc_id}: {e}")
+                # Fallback: envia o texto puro sem parser
+                try:
+                    if len(texto_completo) > 4000:
+                        parts_txt = [texto_completo[i:i+3900] for i in range(0, len(texto_completo), 3900)]
+                        for pt in parts_txt:
+                            bot.send_message(chat_id, pt)
+                    else:
+                        bot.reply_to(message, texto_completo)
+                except Exception as e_fallback:
+                    print(f"[ERROR] Falha crítica ao enviar detalhes da reunião #{doc_id}: {e_fallback}")
+
+@bot.message_handler(content_types=['voice', 'audio'])
+def handle_audio_upload(message):
+    if not is_authorized(message):
+        print(f"[BLOQUEADO] Áudio recebido de Chat ID não autorizado: {message.chat.id}")
+        bot.reply_to(message, "Acesso negado. Este bot do agente é privado.")
+        return
+
+    bot.send_chat_action(message.chat.id, 'record_audio')
+    
+    try:
+        # Identifica se é voice (mensagem de voz gravada) ou audio (arquivo anexado)
+        is_voice = message.content_type == 'voice'
+        media = message.voice if is_voice else message.audio
+        
+        # Validação do limite de tamanho do Telegram para download de arquivos por bots (20 MB)
+        if media.file_size and media.file_size > 20 * 1024 * 1024:
+            bot.reply_to(
+                message,
+                "⚠️ *Arquivo de áudio muito grande!*\n\n"
+                "O Telegram limita o download de arquivos por bots a no máximo *20 MB*.\n"
+                "Seu arquivo possui aproximadamente *{:.1f} MB*.\n\n"
+                "💡 *Sugestão:* Divida o áudio em partes menores de até 20 MB ou converta-o para um formato mais compactado."
+                .format(media.file_size / (1024 * 1024)),
+                parse_mode="Markdown"
+            )
+            return
+            
+        file_id = media.file_id
+        
+        # Obtém caminhos
+        file_info = bot.get_file(file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        # Caminho do diretório uploads/archive/audio/
+        archive_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "uploads", "archive", "audio"))
+        os.makedirs(archive_dir, exist_ok=True)
+        
+        # Define nomes de arquivos
+        timestamp = int(time.time())
+        ext = os.path.splitext(file_info.file_path)[1]
+        if not ext:
+            ext = ".ogg" if is_voice else ".mp3"
+            
+        original_filename = f"{timestamp}_{file_id}{ext}"
+        original_filepath = os.path.join(archive_dir, original_filename)
+        
+        wav_filename = f"{timestamp}_{file_id}.wav"
+        wav_filepath = os.path.join(archive_dir, wav_filename)
+        
+        # Salva o arquivo de áudio original recebido
+        with open(original_filepath, 'wb') as f:
+            f.write(downloaded_file)
+        
+        bot.reply_to(message, "📥 Áudio recebido! Convertendo e preparando para transcrição...")
+        
+        # Conversão via ffmpeg para WAV
+        cmd = ["ffmpeg", "-y", "-i", original_filepath, "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", wav_filepath]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        if result.returncode != 0:
+            error_msg = result.stderr.decode('utf-8', errors='ignore')
+            print(f"[ERROR] Falha na conversão de áudio pelo ffmpeg: {error_msg}")
+            bot.reply_to(message, "❌ Erro ao converter o arquivo de áudio. Verifique se o formato está correto.")
+            return
+            
+        # Transcrição
+        from meu_agente_cli.speech_to_text import transcrever_arquivo_audio
+        
+        bot.send_chat_action(message.chat.id, 'typing')
+        transcription = transcrever_arquivo_audio(wav_filepath)
+        
+        if not transcription.strip() or transcription.startswith("["):
+            bot.reply_to(message, f"⚠️ Não consegui extrair palavras compreensíveis do áudio.\n\nRetorno: {transcription or 'Áudio em silêncio'}")
+            return
+            
+        # Guarda no estado temporário (em memória)
+        pending_transcriptions[message.chat.id] = {
+            "text": transcription,
+            "audio_path": wav_filepath
+        }
+        
+        # Monta teclado inline com opções
+        markup = InlineKeyboardMarkup()
+        btn_simple = InlineKeyboardButton("📝 Resumo Simples", callback_data="audio_action:simple")
+        btn_detailed = InlineKeyboardButton("📌 Pontos & Plano de Ação", callback_data="audio_action:detailed")
+        btn_custom = InlineKeyboardButton("✍️ Outra Instrução...", callback_data="audio_action:custom")
+        
+        markup.row(btn_simple, btn_detailed)
+        markup.row(btn_custom)
+        
+        # Envia resposta
+        transcription_escaped = escape_markdown(transcription)
+        msg_text = (
+            f"🎙️ *Áudio Transcrito com Sucesso:*\n\n"
+            f"_\"{transcription_escaped}\"_\n\n"
+            f"Escolha o que deseja fazer com esta transcrição:"
+        )
+        try:
+            bot.reply_to(message, msg_text, reply_markup=markup, parse_mode="Markdown")
+        except Exception as e:
+            print(f"[Warning] Falha ao renderizar Markdown em handle_audio_upload response: {e}")
+            try:
+                msg_text_plain = (
+                    f"🎙️ Áudio Transcrito com Sucesso:\n\n"
+                    f"\"{transcription}\"\n\n"
+                    f"Escolha o que deseja fazer com esta transcrição:"
+                )
+                bot.reply_to(message, msg_text_plain, reply_markup=markup)
+            except Exception as e_fallback:
+                print(f"[ERROR] Falha crítica ao enviar resposta de transcrição de voz: {e_fallback}")
+        
+    except Exception as e:
+        print(f"[ERROR] Falha geral no recebimento e transcrição de áudio: {e}")
+        bot.reply_to(message, f"❌ Ocorreu um erro no processamento do áudio: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("audio_action:"))
+def handle_audio_action(call):
+    chat_id = call.message.chat.id
+    action = call.data.split(":")[1]
+    
+    trans_data = pending_transcriptions.get(chat_id)
+    if not trans_data:
+        bot.answer_callback_query(call.id, "Nenhuma transcrição ativa encontrada.")
+        bot.send_message(chat_id, "⚠️ Desculpe, a transcrição expirou ou não foi encontrada. Envie o áudio novamente.")
+        return
+        
+    transcription = trans_data["text"]
+    audio_path = trans_data["audio_path"]
+    
+    bot.answer_callback_query(call.id)
+    
+    if action == "simple":
+        bot.send_message(chat_id, "📝 Gerando resumo simples...")
+        bot.send_chat_action(chat_id, 'typing')
+        try:
+            telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
+            prompt = f"Faça um resumo simples e direto da seguinte transcrição de áudio:\n\n{transcription}{telegram_instruction}"
+            response = agent.process_agent_turn_silent(prompt)
+            
+            db.save_audio_transcription(chat_id, audio_path, transcription, "Resumo Simples", response)
+            
+            bot.send_message(chat_id, response, parse_mode="Markdown")
+            pending_transcriptions.pop(chat_id, None)
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Erro ao gerar resumo: {e}")
+            
+    elif action == "detailed":
+        bot.send_message(chat_id, "📌 Gerando principais pontos e plano de ação...")
+        bot.send_chat_action(chat_id, 'typing')
+        try:
+            telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
+            prompt = (
+                f"Analise a seguinte transcrição de áudio e forneça um resumo estruturado contendo "
+                f"os principais pontos discutidos e um plano de ação detalhado com os próximos passos:\n\n"
+                f"{transcription}{telegram_instruction}"
+            )
+            response = agent.process_agent_turn_silent(prompt)
+            
+            db.save_audio_transcription(chat_id, audio_path, transcription, "Principais Pontos e Plano de Ação", response)
+            
+            bot.send_message(chat_id, response, parse_mode="Markdown")
+            pending_transcriptions.pop(chat_id, None)
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Erro ao gerar resumo: {e}")
+            
+    elif action == "custom":
+        user_states[chat_id] = "waiting_for_custom_instruction"
+        bot.send_message(chat_id, "✍️ Digite a instrução personalizada para processar o áudio (ex: 'traduza para inglês' ou 'extraia datas'):")
 
 def extract_pdf_text(file_path: str) -> str:
     """Extrai texto de um arquivo PDF usando a biblioteca pypdf."""
@@ -370,6 +860,19 @@ def handle_document_upload(message):
     bot.send_chat_action(message.chat.id, 'typing')
     
     try:
+        # Validação do limite de tamanho do Telegram para download de arquivos por bots (20 MB)
+        if message.document.file_size and message.document.file_size > 20 * 1024 * 1024:
+            bot.reply_to(
+                message,
+                "⚠️ *Arquivo muito grande!*\n\n"
+                "O Telegram limita o download de arquivos por bots a no máximo *20 MB*.\n"
+                "Seu arquivo possui aproximadamente *{:.1f} MB*.\n\n"
+                "💡 *Sugestão:* Por favor, envie um arquivo menor que 20 MB."
+                .format(message.document.file_size / (1024 * 1024)),
+                parse_mode="Markdown"
+            )
+            return
+            
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         

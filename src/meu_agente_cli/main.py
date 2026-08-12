@@ -855,7 +855,10 @@ def handle_slash_command(cmd_input: str) -> bool:
             console.print("[dim]Use [green]/cron add[/green] para agendar novo subagente ou [green]/cron delete[/green] para remover.[/dim]")
             
     elif command == "/backup":
-        password = getpass.getpass("Defina uma senha para criptografar o backup: ")
+        if len(parts) < 2:
+            password = getpass.getpass("Defina uma senha para criptografar o backup: ")
+        else:
+            password = " ".join(parts[1:])
         if not password.strip():
             console.print("[red]Senha de criptografia não pode ser vazia![/red]")
             return True

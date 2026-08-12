@@ -36,6 +36,12 @@ Ele utiliza o gerenciador de dependências `uv` para máxima velocidade e isolam
 * **Modo Não-Seguro**: Permite rodar comandos CLI arbitrários, condicionado à validação de uma **Senha de Segurança** (salva no PostgreSQL com criptografia SHA-256) e à confirmação interativa do usuário.
 * **Restrição de Subagentes**: Tarefas rodando em segundo plano são estritamente proibidas de executar comandos CLI inseguros, prevenindo qualquer execução autônoma indevida.
 
+### 6. 🎙️ Transcrição de Áudio e Registro de Reuniões
+* **Recepção de Mídias**: Suporta o envio de mensagens de voz e arquivos de áudio (como `.ogg`, `.mp3`) diretamente pelo Telegram.
+* **Processamento Automatizado**: Os arquivos são baixados para `uploads/archive/audio/` e convertidos via `ffmpeg` para WAV para serem transcritos localmente usando a biblioteca `speech_recognition` (Google Speech Recognition).
+* **Teclado de Ações (Resumos & Planos)**: Teclado inline interativo para solicitar resumos simples, detalhados com plano de ação ou enviar instruções personalizadas para o texto transcrito.
+* **Persistência Completa**: Grava de forma permanente os metadados do áudio, a transcrição textual, a instrução executada e o relatório/resumo gerado pela LLM no PostgreSQL na tabela `audio_transcriptions`, ideal para arquivamento de reuniões.
+
 ---
 
 ## 🛠️ Instalação e Requisitos
@@ -100,6 +106,10 @@ Digite esses comandos diretamente na barra de entrada de texto no terminal:
 * **`/cron`**: Gerencia e exibe os subagentes agendados.
   - `/cron add`: Cria um cron job interativamente.
   - `/cron delete`: Exclui/desativa um cronjob pelo ID.
+* **`/reunioes`**: Lista as reuniões e gravações de áudio registradas no banco.
+  - `/reunioes <ID>`: Exibe os detalhes completos de uma reunião específica (transcrição original, áudio correspondente, solicitação de processamento e resumo/plano de ação da LLM).
+* **`/transcrever`**: Lista arquivos de áudio presentes na pasta `uploads/` do servidor.
+  - `/transcrever <nome_do_arquivo>`: Inicia a transcrição do áudio local (processando automaticamente em chunks caso o arquivo seja longo/grande) e oferece o menu interativo de resumo.
 * **`/finance`**: Exibe a tabela de transações do **Mês Atual** e o painel de resumo financeiro dinâmico.
   - `/finance next`: Mostra a projeção e planejamento de contas para o **Mês Seguinte**.
   - `/finance deleted`: Lista todos os lançamentos que foram inativados (Soft Deleted).

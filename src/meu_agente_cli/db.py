@@ -15,7 +15,9 @@ DB_NAME = os.environ.get("DB_NAME") or "meu_agente_cli"
 
 def run_wsl_command(cmd_list: list) -> subprocess.CompletedProcess:
     """Executa um comando no WSL."""
-    return subprocess.run(cmd_list, capture_output=True, text=True)
+    if os.name == 'nt':
+        return subprocess.run(["wsl"] + cmd_list, capture_output=True, encoding="utf-8", errors="ignore")
+    return subprocess.run(cmd_list, capture_output=True, encoding="utf-8", errors="ignore")
 
 def is_postgresql_installed() -> bool:
     """Verifica se o PostgreSQL está instalado no WSL."""
@@ -29,10 +31,12 @@ def install_postgresql() -> bool:
     
     # Executa de forma interativa para que o usuário possa digitar a senha do sudo se necessário
     try:
-        # Primeiro atualiza o repositório
-        subprocess.run(["sudo", "apt-get", "update"], check=True)
-        # Depois instala o postgresql
-        subprocess.run(["sudo", "apt-get", "install", "-y", "postgresql", "postgresql-contrib"], check=True)
+        if os.name == 'nt':
+            subprocess.run(["wsl", "sudo", "apt-get", "update"], check=True)
+            subprocess.run(["wsl", "sudo", "apt-get", "install", "-y", "postgresql", "postgresql-contrib"], check=True)
+        else:
+            subprocess.run(["sudo", "apt-get", "update"], check=True)
+            subprocess.run(["sudo", "apt-get", "install", "-y", "postgresql", "postgresql-contrib"], check=True)
         print("[SUCCESS] PostgreSQL instalado com sucesso!")
         return True
     except subprocess.CalledProcessError as e:
@@ -65,7 +69,10 @@ def ensure_postgresql_service() -> bool:
         print("\n[INFO] Iniciando o serviço PostgreSQL no WSL...")
         try:
             # Roda interativo caso necessite de senha sudo
-            subprocess.run(["sudo", "service", "postgresql", "start"], check=True)
+            if os.name == 'nt':
+                subprocess.run(["wsl", "sudo", "service", "postgresql", "start"], check=True)
+            else:
+                subprocess.run(["sudo", "service", "postgresql", "start"], check=True)
             # Dá um tempo para o serviço subir
             time.sleep(2)
         except subprocess.CalledProcessError as e:
@@ -253,11 +260,26 @@ def init_database() -> bool:
                 )
             """)
             
+            # 7. Tabela de Transcrições de Áudio
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS audio_transcriptions (
+                    id SERIAL PRIMARY KEY,
+                    chat_id BIGINT NOT NULL,
+                    audio_path VARCHAR(512) NOT NULL,
+                    transcription TEXT NOT NULL,
+                    user_prompt TEXT NOT NULL,
+                    llm_response TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    active BOOLEAN DEFAULT TRUE
+                )
+            """)
+            
             # Migrations para bases de dados existentes
             cur.execute("ALTER TABLE user_notes ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
             cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS due_date DATE")
             cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
             cur.execute("ALTER TABLE cron_jobs ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
+            cur.execute("ALTER TABLE audio_transcriptions ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
             
         conn.commit()
         conn.close()
@@ -807,3 +829,104 @@ def save_credit_card(name: str, closing_day: int, due_day: int) -> bool:
     except Exception as e:
         print(f"[ERROR] Erro ao salvar cartão de crédito no banco: {e}", file=sys.stderr)
         return False
+
+# 7. Transcrições de Áudio (Audio Transcriptions / Reuniões)
+def save_audio_transcription(chat_id: int, audio_path: str, transcription: str, user_prompt: str, llm_response: str) -> bool:
+    """Salva uma transcrição consolidada com o áudio original, prompt e resposta da LLM no banco."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO audio_transcriptions (chat_id, audio_path, transcription, user_prompt, llm_response) VALUES (%s, %s, %s, %s, %s)",
+                (chat_id, audio_path, clean_string(transcription), clean_string(user_prompt), clean_string(llm_response))
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao salvar transcrição de áudio: {e}", file=sys.stderr)
+        return False
+
+def list_audio_transcriptions(chat_id: int, limit: int = 15) -> List[Tuple[int, str, str, str, datetime]]:
+    """Retorna a lista de transcrições de áudio ativas registradas para o usuário."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, audio_path, transcription, user_prompt, created_at FROM audio_transcriptions "
+                "WHERE chat_id = %s AND active = TRUE ORDER BY id DESC LIMIT %s",
+                (chat_id, limit)
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"[ERROR] Erro ao listar transcrições de áudio: {e}", file=sys.stderr)
+        return []
+
+def list_deleted_audio_transcriptions(chat_id: int, limit: int = 15) -> List[Tuple[int, str, str, str, datetime]]:
+    """Retorna a lista de transcrições de áudio inativas (soft deleted) registradas para o usuário."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, audio_path, transcription, user_prompt, created_at FROM audio_transcriptions "
+                "WHERE chat_id = %s AND active = FALSE ORDER BY id DESC LIMIT %s",
+                (chat_id, limit)
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"[ERROR] Erro ao listar transcrições de áudio inativas: {e}", file=sys.stderr)
+        return []
+
+def get_audio_transcription_by_id(chat_id: int, doc_id: int) -> Optional[Tuple[int, str, str, str, str, datetime, bool]]:
+    """Retorna os detalhes completos de uma transcrição de áudio específica pelo ID e chat_id (inclui coluna active)."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, audio_path, transcription, user_prompt, llm_response, created_at, active FROM audio_transcriptions "
+                "WHERE id = %s AND chat_id = %s",
+                (doc_id, chat_id)
+            )
+            row = cur.fetchone()
+        conn.close()
+        return row
+    except Exception as e:
+        print(f"[ERROR] Erro ao obter transcrição de áudio por ID: {e}", file=sys.stderr)
+        return None
+
+def delete_audio_transcription(chat_id: int, doc_id: int) -> bool:
+    """Realiza a inativação lógica (soft delete) de um registro de transcrição de áudio."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE audio_transcriptions SET active = FALSE WHERE id = %s AND chat_id = %s",
+                (doc_id, chat_id)
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao inativar transcrição de áudio #{doc_id}: {e}", file=sys.stderr)
+        return False
+
+def restore_audio_transcription(chat_id: int, doc_id: int) -> bool:
+    """Restaura (ativa novamente) um registro de transcrição de áudio inativado logicamente."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE audio_transcriptions SET active = TRUE WHERE id = %s AND chat_id = %s",
+                (doc_id, chat_id)
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao reativar transcrição de áudio #{doc_id}: {e}", file=sys.stderr)
+        return False
+

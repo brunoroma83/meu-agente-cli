@@ -1,10 +1,12 @@
 FROM python:3.11-slim
 
-# Instala dependências do sistema para o psycopg e criptografia
+# Instala dependências do sistema para o psycopg, criptografia, pyaudio e conversão de áudio (ffmpeg)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     curl \
+    portaudio19-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Instala o gerenciador uv de dependências do Python

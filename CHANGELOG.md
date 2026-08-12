@@ -9,6 +9,11 @@ O formato é baseado no [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 ## [Unreleased]
 
 ### Added
+- **Transcrição de Áudio em Chunks e Suporte a Grandes Arquivos**: Refatoração do módulo de voz para processar automaticamente arquivos de áudio longos em blocos sequenciais na memória de 45 segundos, evitando erros de timeout e limites de tamanho de requisição na API de Speech Recognition do Google.
+- **Comando `/transcrever` no Telegram**: Permite listar os arquivos de áudio presentes na pasta `uploads/` do servidor e transcrever arquivos manuais de grande porte (superando a restrição de 20 MB da API de Bots do Telegram) digitando `/transcrever <nome_do_arquivo>`.
+- **Transcrição de Áudio e Histórico de Reuniões**: Novo sistema de recepção de arquivos de áudio/voz via Telegram. O arquivo de mídia é salvo fisicamente em `uploads/archive/audio/`, convertido para WAV usando `ffmpeg`, e transcrito com `speech_recognition`. O bot envia um teclado inline que permite gerar resumos simples, detalhados com plano de ação, ou aplicar instruções personalizadas através da LLM. Os registros consolidados são persistidos permanentemente na nova tabela `audio_transcriptions` do PostgreSQL.
+- **Comando `/reunioes` no Telegram**: Permite listar reuniões e gravações de áudio anteriores e consultar o detalhamento completo de cada uma usando `/reunioes <id>`.
+- **Compatibilidade do WSL e PostgreSQL no Windows Host**: Ajuste nos utilitários de banco de dados para executar comandos e consultas administrativas de serviço via WSL com codificação de caracteres UTF-8 correta, evitando travamentos por decodificação `cp1252` quando o bot é hospedado nativamente no Windows.
 - **Integração de Bot do Telegram**: Novo script `telegram_app.py` e serviço Docker Compose `telegram-bot` adicionados para hospedar o agente como um bot do Telegram privado e seguro. O bot intercepta comandos e renderiza as listagens principais (`/finance`, `/notes`, `/cron`, `/help`) em formatos Markdown customizados e adaptados para telas móveis (evitando a quebra de tabelas em smartphones), com fallback automático e IA silenciosa de segundo plano.
 - **Análise de Documentos e Imagens**: Suporte para carregar e analisar imagens multimodais (via Base64 enviada ao LM Studio) e extrair textos de arquivos PDF, Word, Excel e textos puros diretamente pelo chat do Telegram, além de aceitar importação automática de finanças por arquivos CSV.
 - **Central de Ajuda e search_docs_tool**: Adicionada pasta de manuais `docs/` (com a documentação detalhada do `/finance` em `finance.md`) e ferramenta customizada `search_docs_tool` para permitir à IA pesquisar e carregar manuais de instrução dinamicamente para sanar dúvidas do usuário.
@@ -27,6 +32,7 @@ O formato é baseado no [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - **Datas de Vencimento (`due_date`)**: Campo adicionado nas transações para permitir agendamentos e melhor organização de contas futuras.
 
 ### Changed
+- **Dependências no Dockerfile**: Adicionado `portaudio19-dev` e `ffmpeg` às dependências do sistema do Dockerfile para possibilitar o build correto da biblioteca `pyaudio` e a conversão de áudio via bot do Telegram.
 - **Exclusão Lógica (Soft Delete)**: O agente passou a adotar exclusão lógica. Registros deletados de despesas/receitas, notas ou cronjobs agora apenas são inativados (`active = false`), impedindo perdas destrutivas de dados.
 - **Filtro Padrão do `/finance`**: O comando sem argumentos agora assume o mês corrente por padrão (ex: `mes=08-2026`).
 - **Resiliência do Parser de Ferramentas**: Modificado o interpretador de fluxo para ser tolerante a respostas conversacionais da LLM que antecedam o bloco de código JSON. Adicionado também um parser de **fallback robusto com expressões regulares** que repara e extrai chamadas de comandos mesmo se a LLM gerar JSON malformado contendo aspas não escapadas ou quebras de linha cruas em scripts.
