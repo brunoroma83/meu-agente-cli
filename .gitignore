@@ -7,5 +7,6 @@ wheels/
 *.egg-info
 backups/
 uploads/
+.env
 # Virtual environments
 .venv
