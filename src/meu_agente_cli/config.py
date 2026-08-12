@@ -2,6 +2,10 @@ import os
 import re
 import json
 from pathlib import Path
+from dotenv import load_dotenv
+
+# carrega o .env
+load_dotenv()
 
 CONFIG_DIR = Path.home() / ".config" / "meu-agente-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -14,7 +18,9 @@ DEFAULT_SETTINGS = {
     "db_user": "postgres",
     "db_password": "",
     "db_host": "127.0.0.1",
-    "db_port": 5432
+    "db_port": 5432,
+    "telegram_bot_token": "",
+    "telegram_authorized_user_ids": ""
 }
 
 def get_wsl_host_ip() -> str:
@@ -104,6 +110,35 @@ def get_lm_studio_url() -> str:
         host = get_wsl_host_ip()
     port = config.get("lm_studio_port", 1234)
     return f"http://{host}:{port}"
+
+def get_telegram_bot_token() -> str:
+    """Retorna o Token do Telegram carregando de env var ou config.json."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if token:
+        return token.strip()
+    config = load_bootstrap_config()
+    return config.get("telegram_bot_token", "").strip()
+
+def get_telegram_authorized_user_ids() -> list:
+    """Retorna a lista de IDs de usuários autorizados no Telegram."""
+    env_ids = os.environ.get("TELEGRAM_AUTHORIZED_USER_IDS")
+    if env_ids:
+        try:
+            return [int(x.strip()) for x in env_ids.split(",") if x.strip().isdigit()]
+        except Exception:
+            pass
+    config = load_bootstrap_config()
+    val = config.get("telegram_authorized_user_ids", "")
+    if isinstance(val, list):
+        return [int(x) for x in val if str(x).isdigit()]
+    elif isinstance(val, int):
+        return [val]
+    elif isinstance(val, str) and val.strip():
+        try:
+            return [int(x.strip()) for x in val.split(",") if x.strip().isdigit()]
+        except Exception:
+            pass
+    return []
 
 def clean_string(s: str) -> str:
     """

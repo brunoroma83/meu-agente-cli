@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import meu_agente_cli.db as db
 import meu_agente_cli.security as security
+import meu_agente_cli.invest as invest
 
 # Dicionário de Feeds RSS populares
 RSS_FEEDS = {
@@ -366,3 +367,14 @@ def calculator_tool(expression: Optional[str] = None, expressions: Optional[Dict
         return f"Resultado: {evaluate_expr(expression)}"
         
     return "Erro: Nenhuma expressão ou lote de expressões fornecido."
+
+def invest_tool(**kwargs):
+    if 'action' in kwargs:
+        if kwargs['action'] == 'get_invest':
+            return invest.get_invest()
+        elif kwargs['action'] == 'set_invest':
+            return invest.set_invest(**kwargs)
+        elif kwargs['action'] == 'update_invest':
+            return invest.update_invest(**kwargs)
+    return f"Erro: Ação inválida para a ferramenta de investimentos.\nParâmetros recebidos: {kwargs}"
+    

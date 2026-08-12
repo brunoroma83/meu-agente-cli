@@ -474,20 +474,31 @@ def handle_finance_card_command(parts: list, console: Console) -> None:
                     
         closing_day = card_info["closing_day"]
         due_day = card_info["due_day"]
-        
-        # Determina o mês inicial da fatura
+
+        # 1. Determina o mês e ano do fechamento da fatura (Closing Month/Year)
         if buy_date.day >= closing_day:
             if buy_date.month == 12:
-                first_due_month = 1
-                first_due_year = buy_date.year + 1
+                closing_month = 1
+                closing_year = buy_date.year + 1
             else:
-                first_due_month = buy_date.month + 1
-                first_due_year = buy_date.year
+                closing_month = buy_date.month + 1
+                closing_year = buy_date.year
         else:
-            first_due_month = buy_date.month
-            first_due_year = buy_date.year
-            
-        # Divide o valor com arredondamento correto
+            closing_month = buy_date.month
+            closing_year = buy_date.year
+
+        # 2. Determina o vencimento da primeira parcela
+        if due_day <= closing_day:
+            if closing_month == 12:
+                first_due_month = 1
+                first_due_year = closing_year + 1
+            else:
+                first_due_month = closing_month + 1
+                first_due_year = closing_year
+        else:
+            first_due_month = closing_month
+            first_due_year = closing_year
+
         base_inst_val = round(total_amount / installments, 2)
         diff = round(total_amount - (base_inst_val * installments), 2)
         

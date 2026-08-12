@@ -67,6 +67,8 @@ async def run_subagent_loop(task_prompt: str) -> str:
                     result = "Erro de Segurança: Subagentes em segundo plano não têm permissão para executar comandos não-seguros."
             elif tool_name == "calculator_tool":
                 result = tools.calculator_tool(**args)
+            elif tool_name == "invest_tool":
+                result = tools.invest_tool(**args)
             else:
                 result = f"Erro: Ferramenta '{tool_name}' desconhecida."
         except Exception as e:

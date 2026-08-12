@@ -1,5 +1,6 @@
 import getpass
 import json
+from typing import Any
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -162,53 +163,7 @@ def process_agent_turn(user_input: str, console: Console) -> None:
         console.print(f"\n[bold blue][Tool][/bold blue] Chamando: [yellow]{tool_name}[/yellow]...")
         
         # Executa a ferramenta
-        tool_result = ""
-        try:
-            if tool_name == "get_weather":
-                tool_result = tools.get_weather(**args)
-            elif tool_name == "get_financial_quote":
-                tool_result = tools.get_financial_quote(**args)
-            elif tool_name == "get_news":
-                tool_result = tools.get_news(**args)
-            elif tool_name == "finance_tool":
-                tool_result = tools.finance_tool(**args)
-            elif tool_name == "notes_tool":
-                tool_result = tools.notes_tool(**args)
-            elif tool_name == "execute_cli_command":
-                cmd = args.get("command", "")
-                tool_result = handle_cli_tool_execution(cmd, console)
-            elif tool_name == "calculator_tool":
-                tool_result = tools.calculator_tool(**args)
-            else:
-                # Tenta carregar a ferramenta dinamicamente do custom_tools.json
-                from pathlib import Path
-                import importlib
-                
-                custom_config_path = Path(__file__).parent.resolve() / "custom_tools" / "custom_tools.json"
-                loaded = False
-                if custom_config_path.exists():
-                    try:
-                        with open(custom_config_path, "r", encoding="utf-8") as f_custom:
-                            custom_data = json.load(f_custom)
-                        custom_tools = custom_data.get("tools", {})
-                        if tool_name in custom_tools:
-                            tool_info = custom_tools[tool_name]
-                            python_module = tool_info.get("python_module")
-                            function_name = tool_info.get("function_name", "run")
-                            
-                            # Importa o módulo dinamicamente e executa a função
-                            module = importlib.import_module(python_module)
-                            func = getattr(module, function_name)
-                            tool_result = func(**args)
-                            loaded = True
-                    except Exception as ex:
-                        tool_result = f"Erro ao tentar importar/executar ferramenta customizada '{tool_name}': {ex}"
-                        loaded = True
-                
-                if not loaded:
-                    tool_result = f"Erro: Ferramenta '{tool_name}' não suportada."
-        except Exception as e:
-            tool_result = f"Erro na execução da ferramenta '{tool_name}': {str(e)}"
+        tool_result = execute_tool_by_name(tool_name, args, console, allow_interactive=True)
             
         console.print(f"[bold blue][Tool Resultado][/bold blue] Finalizado.")
         
@@ -217,3 +172,108 @@ def process_agent_turn(user_input: str, console: Console) -> None:
         messages.append({"role": "user", "content": f"Resultado da ferramenta {tool_name}:\n{tool_result}"})
     else:
         console.print("[red]Erro: Limite de iterações excedido pelo agente (loop de ferramentas).[/red]")
+
+def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_interactive: bool = True) -> str:
+    """Executa a ferramenta solicitada e retorna o resultado formatado em texto."""
+    import json
+    
+    # Normaliza aliases de ferramentas customizadas para evitar alucinações
+    if tool_name == "get_freelance_tip":
+        tool_name = "daily_tips_tool"
+        
+    try:
+        if tool_name == "get_weather":
+            return tools.get_weather(**args)
+        elif tool_name == "get_financial_quote":
+            return tools.get_financial_quote(**args)
+        elif tool_name == "get_news":
+            return tools.get_news(**args)
+        elif tool_name == "finance_tool":
+            return tools.finance_tool(**args)
+        elif tool_name == "notes_tool":
+            return tools.notes_tool(**args)
+        elif tool_name == "execute_cli_command":
+            cmd = args.get("command", "")
+            if allow_interactive:
+                return handle_cli_tool_execution(cmd, console)
+            else:
+                # No modo não interativo (como Telegram), executamos apenas se for seguro!
+                if security.is_command_safe(cmd):
+                    code, out, err = security.run_bash_command(cmd)
+                    return f"Código de saída: {code}\nStdout: {out}\nStderr: {err}"
+                else:
+                    return f"Erro: O comando '{cmd}' não está na whitelist e a execução remota de comandos não-seguros foi bloqueada."
+        elif tool_name == "calculator_tool":
+            return tools.calculator_tool(**args)
+        elif tool_name == "invest_tool":
+            return tools.invest_tool(**args)
+        else:
+            # Tenta carregar a ferramenta dinamicamente do custom_tools.json
+            from pathlib import Path
+            import importlib
+            
+            custom_config_path = Path(__file__).parent.resolve() / "custom_tools" / "custom_tools.json"
+            loaded = False
+            if custom_config_path.exists():
+                try:
+                    with open(custom_config_path, "r", encoding="utf-8") as f_custom:
+                        custom_data = json.load(f_custom)
+                    custom_tools = custom_data.get("tools", {})
+                    if tool_name in custom_tools:
+                        tool_info = custom_tools[tool_name]
+                        python_module = tool_info.get("python_module")
+                        function_name = tool_info.get("function_name", "run")
+                        
+                        # Importa o módulo dinamicamente e executa a função
+                        module = importlib.import_module(python_module)
+                        func = getattr(module, function_name)
+                        result = func(**args)
+                        return result
+                except Exception as ex:
+                    return f"Erro ao tentar importar/executar ferramenta customizada '{tool_name}': {ex}"
+            
+            return f"Erro: Ferramenta '{tool_name}' não suportada."
+    except Exception as e:
+        return f"Erro na execução da ferramenta '{tool_name}': {str(e)}"
+
+def process_agent_turn_silent(user_input: Any) -> str:
+    """
+    Executa um turno completo de pensamento do agente de forma silenciosa.
+    Ideal para integrações como Telegram, onde não queremos poluir o console do sistema.
+    """
+    model = db.get_setting("active_model", "google/gemma-4-31b-qat")
+    history_limit = db.get_chat_history_limit()
+    history = db.get_chat_history(limit=history_limit)
+    
+    # Cria uma instância de Console isolada para passar aos métodos que exigem assinatura
+    silent_console = Console(color_system=None, force_terminal=False)
+    
+    messages = []
+    messages.append({"role": "system", "content": llm.SYSTEM_PROMPT})
+    for sender, msg in history:
+        messages.append({"role": sender, "content": msg})
+    messages.append({"role": "user", "content": user_input})
+    
+    max_turns = 10
+    for turn in range(max_turns):
+        # Conversa síncrona com o LLM (sem streaming)
+        response_text = llm.chat_completion(model, messages, stream=False)
+        tool_call = llm.parse_tool_call(response_text)
+        
+        if not tool_call:
+            # Resposta final do agente
+            db.save_chat_message("user", user_input)
+            db.save_chat_message("assistant", response_text)
+            return response_text
+            
+        tool_name = tool_call.get("tool")
+        args = tool_call.get("args", {})
+        
+        # Executa a ferramenta de forma não-interativa (allow_interactive=False)
+        tool_result = execute_tool_by_name(tool_name, args, silent_console, allow_interactive=False)
+        
+        # Alimenta o contexto com a execução e o resultado para a próxima iteração do modelo
+        messages.append({"role": "assistant", "content": response_text})
+        messages.append({"role": "user", "content": f"Resultado da ferramenta {tool_name}:\n{tool_result}"})
+        
+    return "Erro: O agente excedeu o limite de pensamentos (loop de ferramentas)."
