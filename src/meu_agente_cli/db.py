@@ -1,4 +1,5 @@
 import os
+import logging
 import subprocess
 import time
 import sys
@@ -116,6 +117,7 @@ def get_connection(dbname: Optional[str] = None) -> Connection:
             port=db_port
         )
     except psycopg.Error as e:
+        logging.error("Falha ao obter conexão com o banco de dados %s: %s", dbname, e)
         raise e
 
 def init_database() -> bool:
@@ -123,6 +125,7 @@ def init_database() -> bool:
     Inicializa o banco de dados, cria as tabelas se necessário.
     """
     if not ensure_postgresql_service():
+        logging.error("Falha ao configurar serviço PostgreSQL no WSL.")
         print("[ERROR] Falha ao configurar serviço PostgreSQL no WSL.", file=sys.stderr)
         return False
 
@@ -139,6 +142,7 @@ def init_database() -> bool:
             # Se for erro de senha / autenticação, solicita credenciais interativamente
             if "password" in err_msg or "authentication" in err_msg or "fe_sendauth" in err_msg:
                 if os.environ.get("DB_HOST") or os.path.exists("/.dockerenv"):
+                    logging.error("Erro de autenticação com o banco de dados configurado via ambiente: %s", e)
                     print(f"[ERROR] Erro de autenticação com o banco de dados configurado via ambiente: {e}", file=sys.stderr)
                     return False
 
@@ -161,6 +165,7 @@ def init_database() -> bool:
                 save_bootstrap_config(cfg)
             else:
                 # Outro erro de conexão
+                logging.error("Erro ao conectar ao banco de dados: %s", e)
                 print(f"[ERROR] Erro ao conectar ao banco de dados: {e}", file=sys.stderr)
                 return False
 
@@ -176,6 +181,7 @@ def init_database() -> bool:
                 cur.execute(f"CREATE DATABASE {DB_NAME}")
         conn.close()
     except Exception as e:
+        logging.exception("Erro ao conectar ou criar banco de dados inicial")
         print(f"[ERROR] Erro ao conectar ou criar banco de dados inicial: {e}", file=sys.stderr)
         if conn:
             conn.close()
@@ -283,9 +289,11 @@ def init_database() -> bool:
             
         conn.commit()
         conn.close()
+        logging.info("Banco de dados inicializado com sucesso!")
         print("[SUCCESS] Banco de dados inicializado com sucesso!")
         return True
     except Exception as e:
+        logging.exception("Erro ao inicializar tabelas do banco de dados")
         print(f"[ERROR] Erro ao inicializar tabelas do banco de dados: {e}", file=sys.stderr)
         return False
 
@@ -464,6 +472,8 @@ def add_financial_record(record_type: str, category: str, amount: float, descrip
     try:
         cat_clean = clean_string(category)
         desc_clean = clean_string(description)
+        if not due_date:
+            due_date = datetime.now().strftime("%Y-%m-%d")
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute(

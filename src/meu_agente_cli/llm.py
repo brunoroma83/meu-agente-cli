@@ -54,14 +54,69 @@ def __getattr__(name: str) -> Any:
         return build_system_prompt()
     raise AttributeError(f"module {__name__} has no attribute {name}")
 
-def test_lm_studio_connection() -> bool:
-    """Testa a conexão com o LM Studio local."""
-    url = get_lm_studio_url()
+def test_provider_connection() -> bool:
+    """Testa a conexão com o provedor de LLM atualmente ativo."""
+    from meu_agente_cli import db
+    llm_provider = db.get_setting("llm_provider", "lm_studio")
+    active_model = db.get_setting("active_model", "")
+    api_key = db.get_setting("provider_api_key", "")
+    base_url = db.get_setting("provider_base_url", "")
+    
+    if llm_provider == "lm_studio":
+        url = get_lm_studio_url()
+        try:
+            res = httpx.get(f"{url}/v1/models", timeout=5.0)
+            return res.status_code == 200
+        except Exception:
+            return False
+            
+    # Para provedores externos, faremos um ping/request muito simples (uma chamada leve de chat completion de 1 token)
+    headers = {"Content-Type": "application/json"}
+    
+    if llm_provider == "openai":
+        url = "https://api.openai.com/v1/chat/completions"
+        headers["Authorization"] = f"Bearer {api_key}"
+        payload = {"model": active_model or "gpt-4o-mini", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    elif llm_provider == "gemini":
+        url = "https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions"
+        headers["Authorization"] = f"Bearer {api_key}"
+        payload = {"model": active_model or "gemini-1.5-flash", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    elif llm_provider == "deepseek":
+        url = "https://api.deepseek.com/v1/chat/completions"
+        headers["Authorization"] = f"Bearer {api_key}"
+        payload = {"model": active_model or "deepseek-chat", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    elif llm_provider == "qwen":
+        url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        headers["Authorization"] = f"Bearer {api_key}"
+        payload = {"model": active_model or "qwen-plus", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    elif llm_provider == "kimi":
+        url = "https://api.moonshot.cn/v1/chat/completions"
+        headers["Authorization"] = f"Bearer {api_key}"
+        payload = {"model": active_model or "moonshot-v1-8k", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    elif llm_provider == "custom":
+        if not base_url:
+            return False
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = {"model": active_model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    elif llm_provider == "claude":
+        url = "https://api.anthropic.com/v1/messages"
+        headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+        payload = {"model": active_model or "claude-3-5-sonnet-latest", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    else:
+        return False
+        
     try:
-        res = httpx.get(f"{url}/v1/models", timeout=5.0)
+        res = httpx.post(url, json=payload, headers=headers, timeout=5.0)
         return res.status_code == 200
     except Exception:
         return False
+
+def test_lm_studio_connection() -> bool:
+    """Mantido por compatibilidade legado, delega ao novo test_provider_connection."""
+    return test_provider_connection()
 
 def get_available_models() -> List[str]:
     """Retorna os IDs de modelos carregados no LM Studio."""
@@ -81,16 +136,52 @@ def chat_completion(
     stream: bool = True
 ) -> Generator[str, None, None] | str:
     """
-    Executa a chamada ao LM Studio.
+    Executa a chamada ao provedor de LLM configurado (LM Studio ou provedores externos).
     Se stream=True, retorna um gerador que faz o streaming dos tokens de resposta.
     Se stream=False, retorna a string completa da resposta.
     """
-    url = get_lm_studio_url()
+    from meu_agente_cli import db
+    llm_provider = db.get_setting("llm_provider", "lm_studio")
+    api_key = db.get_setting("provider_api_key", "")
+    base_url = db.get_setting("provider_base_url", "")
     
+    # Determina a URL base e cabeçalhos com base no provedor
+    headers = {
+        "Content-Type": "application/json"
+    }
+    
+    if llm_provider == "openai":
+        url = "https://api.openai.com/v1"
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif llm_provider == "gemini":
+        url = "https://generativelanguage.googleapis.com/v1beta/openai/v1"
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif llm_provider == "deepseek":
+        url = "https://api.deepseek.com/v1"
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif llm_provider == "qwen":
+        url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif llm_provider == "kimi":
+        url = "https://api.moonshot.cn/v1"
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif llm_provider == "custom":
+        url = base_url.rstrip('/') if base_url else ""
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+    elif llm_provider == "claude":
+        url = "https://api.anthropic.com/v1"
+        headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        # Fallback para LM Studio
+        url = get_lm_studio_url()
+        llm_provider = "lm_studio"
+        
     # Adiciona o system prompt se não houver um nas mensagens
     has_system = any(m["role"] == "system" for m in messages)
     
-    # Sanitiza todas as mensagens enviadas para a LLM, prevenindo erros de surrogate no payload JSON
+    # Sanitiza todas as mensagens enviadas para a LLM
     payload_messages = []
     for m in messages:
         content = m["content"]
@@ -116,20 +207,54 @@ def chat_completion(
     if not has_system:
         payload_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
         
-    payload = {
-        "model": model,
-        "messages": payload_messages,
-        "temperature": 0.3, # Baixa temperatura para manter chamadas de ferramentas consistentes
-    }
-    
+    if llm_provider == "claude":
+        # Anthropic usa formato próprio de mensagens e system prompt
+        system_content = ""
+        user_assistant_messages = []
+        for m in payload_messages:
+            if m["role"] == "system":
+                system_content = m["content"]
+            else:
+                role = m["role"]
+                if role not in ["user", "assistant"]:
+                    role = "user"
+                user_assistant_messages.append({
+                    "role": role,
+                    "content": m["content"]
+                })
+        
+        payload = {
+            "model": model,
+            "messages": user_assistant_messages,
+            "max_tokens": 4000,
+            "temperature": 0.3,
+        }
+        if system_content:
+            payload["system"] = system_content
+            
+        target_url = f"{url}/messages"
+    else:
+        # Formato compatível com OpenAI
+        payload = {
+            "model": model,
+            "messages": payload_messages,
+            "temperature": 0.3,
+        }
+        target_url = f"{url}/chat/completions" if llm_provider != "lm_studio" else f"{url}/v1/chat/completions"
+        
     if stream:
         payload["stream"] = True
         
         def stream_generator():
             try:
-                with httpx.stream("POST", f"{url}/v1/chat/completions", json=payload, timeout=LLM_TIMEOUT) as r:
+                is_claude = (llm_provider == "claude")
+                with httpx.stream("POST", target_url, json=payload, headers=headers, timeout=LLM_TIMEOUT) as r:
                     if r.status_code != 200:
-                        yield f"[ERROR: LM Studio returned status code {r.status_code}]"
+                        try:
+                            err_body = r.read().decode('utf-8', errors='ignore')
+                            yield clean_string(f"[ERROR: Provedor {llm_provider} retornou status {r.status_code}. Detalhes: {err_body}]")
+                        except Exception:
+                            yield clean_string(f"[ERROR: Provedor {llm_provider} retornou status {r.status_code}]")
                         return
                     for line in r.iter_lines():
                         if line.startswith("data: "):
@@ -138,27 +263,75 @@ def chat_completion(
                                 break
                             try:
                                 data = json.loads(data_str)
-                                content = data["choices"][0]["delta"].get("content", "")
-                                if content:
-                                    # Sanitiza o conteúdo retornado pela LLM antes de repassar
-                                    yield clean_string(content)
+                                if is_claude:
+                                    if data.get("type") == "content_block_delta":
+                                        content = data["delta"].get("text", "")
+                                        if content:
+                                            yield clean_string(content)
+                                else:
+                                    content = data["choices"][0]["delta"].get("content", "")
+                                    if content:
+                                        yield clean_string(content)
                             except Exception:
                                 pass
             except Exception as e:
-                # Garante que a mensagem de erro também esteja limpa de surrogates
-                yield clean_string(f"[ERROR: Conexão perdida com LM Studio: {e}]")
+                yield clean_string(f"[ERROR: Conexão perdida com o provedor {llm_provider}: {e}]")
                 
         return stream_generator()
     else:
         payload["stream"] = False
         try:
-            res = httpx.post(f"{url}/v1/chat/completions", json=payload, timeout=LLM_TIMEOUT)
+            res = httpx.post(target_url, json=payload, headers=headers, timeout=LLM_TIMEOUT)
             if res.status_code == 200:
-                raw_content = res.json()["choices"][0]["message"].get("content", "")
+                data = res.json()
+                if llm_provider == "claude":
+                    raw_content = data["content"][0].get("text", "")
+                else:
+                    raw_content = data["choices"][0]["message"].get("content", "")
                 return clean_string(raw_content)
-            return clean_string(f"Erro ao chamar LLM: Status {res.status_code}")
+            
+            try:
+                err_detail = res.json()
+            except Exception:
+                err_detail = res.text
+            return clean_string(f"Erro ao chamar LLM ({llm_provider}): Status {res.status_code}. Detalhes: {err_detail}")
         except Exception as e:
-            return clean_string(f"Falha na conexão com o LLM no LM Studio: {str(e)}")
+            return clean_string(f"Falha na conexão com o LLM do provedor {llm_provider}: {str(e)}")
+
+def extract_json_object(text: str) -> Optional[str]:
+    """Encontra o primeiro '{' e procura a correspondente chave '}' de fechamento, lidando com strings e escapes."""
+    start_idx = text.find('{')
+    if start_idx == -1:
+        return None
+        
+    brace_count = 0
+    in_string = False
+    escape = False
+    
+    for idx in range(start_idx, len(text)):
+        char = text[idx]
+        
+        if escape:
+            escape = False
+            continue
+            
+        if char == '\\':
+            escape = True
+            continue
+            
+        if char == '"':
+            in_string = not in_string
+            continue
+            
+        if not in_string:
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    return text[start_idx:idx+1]
+                    
+    return None
 
 def parse_tool_call(response_text: str) -> Optional[Dict[str, Any]]:
     """
@@ -170,7 +343,17 @@ def parse_tool_call(response_text: str) -> Optional[Dict[str, Any]]:
     if not text:
         return None
         
-    # Tenta encontrar bloco de código markdown
+    # 1. Tenta extrair usando o extrator robusto de chaves casadas
+    raw_json = extract_json_object(text)
+    if raw_json:
+        try:
+            parsed = json.loads(raw_json)
+            if isinstance(parsed, dict) and "tool" in parsed:
+                return parsed
+        except Exception:
+            pass
+            
+    # 2. Fallback: tenta encontrar bloco de código markdown por regex
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if not match:
         # Procura a primeira ocorrência de { e a última de }
@@ -180,10 +363,10 @@ def parse_tool_call(response_text: str) -> Optional[Dict[str, Any]]:
         raw_json = match.group(1).strip()
         try:
             parsed = json.loads(raw_json)
-            if "tool" in parsed:
+            if isinstance(parsed, dict) and "tool" in parsed:
                 return parsed
         except Exception:
-            # Fallback robusto se a LLM gerou JSON com aspas internas não escapadas ou quebras de linha cruas
+            # Fallback robusto se a LLM gerou JSON com aspas internas não escapadas ou quebras de linha cruas (ex: execute_cli_command)
             try:
                 # Tenta extrair a ferramenta e seus argumentos usando regexes mais flexíveis
                 tool_match = re.search(r'"tool"\s*:\s*"([^"]+)"', raw_json)
@@ -198,7 +381,6 @@ def parse_tool_call(response_text: str) -> Optional[Dict[str, Any]]:
                             cmd_val = cmd_match.group(1).strip()
                             
                             # Remove chaves de fechamento finais se capturadas no modo ganancioso
-                            # Tratamos de trás para frente para limpar os fechamentos do JSON
                             for suffix in ['"} }', '"} \n}', '"}', '}']:
                                 if cmd_val.endswith(suffix):
                                     cmd_val = cmd_val[:-len(suffix)].strip()

@@ -20,7 +20,8 @@ DEFAULT_SETTINGS = {
     "db_host": "127.0.0.1",
     "db_port": 5432,
     "telegram_bot_token": "",
-    "telegram_authorized_user_ids": ""
+    "telegram_authorized_user_ids": "",
+    "log_level": "INFO"
 }
 
 def get_wsl_host_ip() -> str:

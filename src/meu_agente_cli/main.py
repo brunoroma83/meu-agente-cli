@@ -12,6 +12,8 @@ import meu_agente_cli.config as config
 import meu_agente_cli.security as security
 import meu_agente_cli.scheduler as scheduler
 import meu_agente_cli.agent as agent
+import logging
+import meu_agente_cli.logger as logger
 
 console = Console()
 
@@ -41,6 +43,10 @@ def print_banner():
 
 def initialize_components() -> bool:
     """Inicializa banco de dados, testa LM Studio e configura senha."""
+    # Inicializa logging
+    logger.setup_logging()
+    logging.info("Inicializando componentes do Meu Agente CLI...")
+
     # 1. Inicializa banco de dados
     if not db.init_database():
         console.print("[bold red][FALHA][/bold red] Não foi possível conectar ou configurar o PostgreSQL no WSL.")
@@ -346,11 +352,14 @@ def handle_finance_csv_import(console: Console) -> None:
                 shutil.move(csv_file, archive_file)
                 console.print(f"[info] Arquivo CSV original movido para [cyan]uploads/archive/finance_imported_{timestamp}.csv[/cyan].[/info]")
             except Exception as move_ex:
+                logging.warning("Não foi possível mover o arquivo importado para a pasta de arquivos arquivados: %s", move_ex)
                 console.print(f"[warning] Não foi possível mover o arquivo importado para a pasta de arquivos arquivados: {move_ex}[/warning]")
         else:
+            logging.error("Falha ao registrar lançamentos de lote no banco de dados.")
             console.print("[bold red][ERRO][/bold red] Falha ao registrar lançamentos de lote no banco de dados.")
             
     except Exception as e:
+        logging.exception("Falha crítica ao ler o arquivo CSV")
         console.print(f"[bold red][ERRO][/bold red] Falha crítica ao ler o arquivo CSV: {e}")
 
 def handle_finance_card_command(parts: list, console: Console) -> None:
@@ -602,46 +611,150 @@ def handle_slash_command(cmd_input: str) -> bool:
         
     elif command == "/status":
         safe_str = "[bold green]SEGURO[/bold green]" if security.is_safe_mode() else "[bold red]NÃO-SEGURO[/bold red]"
-        lm_url = config.get_lm_studio_url()
+        llm_provider = db.get_setting("llm_provider", "lm_studio")
         active_model = db.get_setting("active_model", "Nenhum")
         
         console.print(f"[bold cyan]Status do Sistema:[/bold cyan]")
         console.print(f"- Modo de Segurança: {safe_str}")
-        console.print(f"- LM Studio URL: [cyan]{lm_url}[/cyan]")
+        console.print(f"- Provedor Ativo: [yellow]{llm_provider.upper()}[/yellow]")
         console.print(f"- Modelo Ativo: [yellow]{active_model}[/yellow]")
         
         # Teste rápido de conexão
-        conn = llm.test_lm_studio_connection()
+        conn = llm.test_provider_connection()
         conn_str = "[bold green]Conectado[/bold green]" if conn else "[bold red]Desconectado[/bold red]"
-        console.print(f"- LM Studio Status: {conn_str}")
+        console.print(f"- Status do Provedor: {conn_str}")
         
     elif command == "/models":
-        models = llm.get_available_models()
-        if not models:
-            console.print("[red]Nenhum modelo detectado no LM Studio. Certifique-se de que carregou um modelo na interface do LM Studio.[/red]")
+        # 1. Menu de Provedores
+        console.print(Panel(
+            "[bold cyan]Escolha o Provedor de LLM:[/bold cyan]\n\n"
+            "1. [green]LM Studio[/green] (Local)\n"
+            "2. [green]OpenAI[/green]\n"
+            "3. [green]Google Gemini[/green]\n"
+            "4. [green]Anthropic Claude[/green]\n"
+            "5. [green]DeepSeek[/green]\n"
+            "6. [green]Alibaba Qwen[/green]\n"
+            "7. [green]Moonshot Kimi[/green]\n"
+            "8. [green]Personalizado[/green] (OpenAI-Compatible)",
+            title="Configuração de Modelos"
+        ))
+        
+        current_provider = db.get_setting("llm_provider", "lm_studio")
+        active_model = db.get_setting("active_model", "Nenhum")
+        console.print(f"Provedor atual: [yellow]{current_provider}[/yellow] | Modelo atual: [yellow]{active_model}[/yellow]")
+        
+        provider_sel = Prompt.ask("Digite o número do provedor desejado (ou Enter para manter o atual)", default="")
+        
+        # Mapeia seleção
+        providers_map = {
+            "1": "lm_studio",
+            "2": "openai",
+            "3": "gemini",
+            "4": "claude",
+            "5": "deepseek",
+            "6": "qwen",
+            "7": "kimi",
+            "8": "custom"
+        }
+        
+        provider = providers_map.get(provider_sel, current_provider)
+        
+        if provider == "lm_studio":
+            # Mantém fluxo original do LM Studio
+            models = llm.get_available_models()
+            if not models:
+                console.print("[red]Nenhum modelo detectado no LM Studio. Certifique-se de que o LM Studio está rodando e com o modelo carregado.[/red]")
+                return True
+                
+            active = db.get_setting("active_model")
+            table = Table(title="Modelos Disponíveis no LM Studio")
+            table.add_column("Índice", justify="center", style="cyan")
+            table.add_column("Nome do Modelo", style="magenta")
+            table.add_column("Status", justify="center", style="green")
+            
+            for idx, m in enumerate(models, 1):
+                status = "[bold green]Ativo[/bold green]" if m == active else ""
+                table.add_row(str(idx), m, status)
+                
+            console.print(table)
+            
+            selection = Prompt.ask("Digite o índice do modelo que deseja ativar (ou pressione Enter para manter o atual)", default="")
+            if selection.isdigit():
+                idx = int(selection) - 1
+                if 0 <= idx < len(models):
+                    db.set_setting("llm_provider", "lm_studio")
+                    db.set_setting("active_model", models[idx])
+                    console.print(f"[bold green]Provedor alterado para LM Studio e modelo ativo para:[/bold green] {models[idx]}")
+                else:
+                    console.print("[red]Índice inválido.[/red]")
             return True
             
-        active = db.get_setting("active_model")
+        # Configurações para Provedores Externos
+        db.set_setting("llm_provider", provider)
         
-        table = Table(title="Modelos Disponíveis no LM Studio")
-        table.add_column("Índice", justify="center", style="cyan")
-        table.add_column("Nome do Modelo", style="magenta")
-        table.add_column("Status", justify="center", style="green")
+        # 2. Chave de API
+        current_key = db.get_setting("provider_api_key", "")
+        key_masked = f"{current_key[:4]}...{current_key[-4:]}" if len(current_key) > 8 else "Não configurada"
         
-        for idx, m in enumerate(models, 1):
-            status = "[bold green]Ativo[/bold green]" if m == active else ""
-            table.add_row(str(idx), m, status)
+        api_key = Prompt.ask(
+            f"Digite a API KEY para o provedor {provider} (Atual: {key_masked}, Enter para manter)", 
+            password=True, 
+            default=current_key
+        )
+        if api_key:
+            db.set_setting("provider_api_key", api_key)
             
-        console.print(table)
+        # 3. Base URL (para o caso Customizado)
+        if provider == "custom":
+            current_url = db.get_setting("provider_base_url", "")
+            base_url = Prompt.ask(
+                f"Digite a URL base do provedor customizado (ex: http://localhost:8000/v1)", 
+                default=current_url
+            )
+            if base_url:
+                db.set_setting("provider_base_url", base_url)
+                
+        # 4. Seleção de Modelos Sugeridos
+        sugestoes = {
+            "openai": ["gpt-4o", "gpt-4o-mini", "o1-mini", "o1-preview"],
+            "gemini": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"],
+            "claude": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+            "deepseek": ["deepseek-chat", "deepseek-coder"],
+            "qwen": ["qwen-turbo", "qwen-plus", "qwen-max"],
+            "kimi": ["moonshot-v1-8k", "moonshot-v1-32k"],
+            "custom": []
+        }
         
-        selection = Prompt.ask("Digite o índice do modelo que deseja ativar (ou pressione Enter para manter o atual)", default="")
-        if selection.isdigit():
-            idx = int(selection) - 1
-            if 0 <= idx < len(models):
-                db.set_setting("active_model", models[idx])
-                console.print(f"[bold green]Modelo ativo alterado para:[/bold green] {models[idx]}")
+        modelos_sugeridos = sugestoes.get(provider, [])
+        
+        if modelos_sugeridos:
+            table = Table(title=f"Modelos Recomendados para {provider.upper()}")
+            table.add_column("Índice", justify="center", style="cyan")
+            table.add_column("Identificador do Modelo", style="magenta")
+            
+            for idx, mod in enumerate(modelos_sugeridos, 1):
+                table.add_row(str(idx), mod)
+            table.add_row(str(len(modelos_sugeridos) + 1), "Outro / Digitar modelo personalizado")
+            
+            console.print(table)
+            
+            model_sel = Prompt.ask("Escolha o índice do modelo desejado", default="1")
+            
+            if model_sel.isdigit():
+                idx_sel = int(model_sel) - 1
+                if 0 <= idx_sel < len(modelos_sugeridos):
+                    chosen_model = modelos_sugeridos[idx_sel]
+                else:
+                    chosen_model = Prompt.ask("Digite o identificador do modelo completo (ex: gpt-3.5-turbo)")
             else:
-                console.print("[red]Índice inválido.[/red]")
+                chosen_model = Prompt.ask("Digite o identificador do modelo completo (ex: gpt-3.5-turbo)")
+        else:
+            # Custom ou outro sem sugestões
+            chosen_model = Prompt.ask("Digite o identificador do modelo a ser utilizado")
+            
+        if chosen_model:
+            db.set_setting("active_model", chosen_model)
+            console.print(f"[bold green][SUCESSO][/bold green] Provedor alterado para [yellow]{provider}[/yellow] e modelo ativo para [yellow]{chosen_model}[/yellow].")
                 
     elif command == "/safe":
         security.set_safe_mode(True)
@@ -881,6 +994,7 @@ def handle_slash_command(cmd_input: str) -> bool:
                 
             console.print(f"[bold green][SUCESSO][/bold green] Backup criptografado gerado em: [yellow]backups/{filename}[/yellow]")
         except Exception as e:
+            logging.exception("Falha ao gerar backup")
             console.print(f"[bold red][ERRO][/bold red] Falha ao gerar backup: {e}")
             
     elif command == "/restore":
@@ -949,6 +1063,7 @@ def handle_slash_command(cmd_input: str) -> bool:
             else:
                 console.print("[yellow]Restauração cancelada pelo usuário.[/yellow]")
         except Exception as e:
+            logging.exception("Falha ao restaurar backup")
             console.print(f"[bold red][ERRO][/bold red] Senha incorreta ou arquivo de backup inválido/corrompido: {e}")
             
     else:
@@ -997,6 +1112,7 @@ def main():
             handle_slash_command("/exit")
             break
         except Exception as e:
+            logging.exception("Erro crítico no loop de chat")
             console.print(f"\n[bold red]Erro crítico no loop de chat: {e}[/bold red]")
 
 if __name__ == "__main__":

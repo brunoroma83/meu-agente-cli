@@ -95,10 +95,12 @@ Este projeto vem com suporte nativo a Docker, permitindo levantar o banco de dad
 Digite esses comandos diretamente na barra de entrada de texto no terminal:
 
 * **`/help`**: Exibe o painel de ajuda com todos os comandos e parâmetros.
-* **`/status`**: Mostra o estado de segurança (Safe/Unsafe), a URL de comunicação com o LM Studio e o modelo de IA atualmente ativo.
+* **`/status`**: Mostra o estado de segurança (Safe/Unsafe), o provedor de LLM ativo, o status de conexão/autenticação e o modelo de IA atualmente selecionado.
 * **`/clear`**: Limpa o histórico de chat da sessão corrente no banco (reseta a janela de contexto deslizante do agente).
 * **`/history <limite>`**: Exibe ou configura o limite dinâmico de mensagens de histórico enviadas ao LLM (ex: `/history 4`).
-* **`/models`**: Consulta os modelos de linguagem carregados no LM Studio e permite alternar o modelo ativo.
+* **`/models`**: Configura o provedor e modelo de linguagem ativo. Permite alternar entre o LM Studio local e os provedores externos (OpenAI, Google Gemini, Anthropic Claude, DeepSeek, Alibaba Qwen, Moonshot Kimi ou um Provedor Personalizado compatível com a API da OpenAI).
+  - No terminal, apresenta um assistente interativo para configurar a chave de API e selecionar o modelo.
+  - No Telegram, aceita parâmetros em linha (ex: `/models openai <API_KEY> <modelo>` ou `/models custom <API_KEY> <URL_BASE> <modelo>`).
 * **`/safe`**: Ativa instantaneamente o Modo Seguro.
 * **`/unsafe`**: Solicita a senha de segurança para desativar o Modo Seguro.
   - `/unsafe sign`: Solicita a senha para assinar criptograficamente (`RSA`) o arquivo `safe_commands.json` após você editá-lo.

@@ -1,4 +1,5 @@
 import sys
+import logging
 import os
 import re
 import time
@@ -25,9 +26,15 @@ if not token:
 
 bot = telebot.TeleBot(token)
 
-# Variáveis globais para gerenciar estados temporários de áudio
 pending_transcriptions = {}  # {chat_id: {"text": str, "audio_path": str}}
 user_states = {}  # {chat_id: str}
+
+TELEGRAM_INSTRUCTION = (
+    "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Se for responder diretamente "
+    "ao usuário em texto, formate com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII "
+    "ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular. Se você precisar "
+    "acionar uma ferramenta, continue respondendo APENAS com o bloco JSON da ferramenta, sem texto adicional de conversa.]"
+)
 
 
 def is_authorized(message) -> bool:
@@ -49,7 +56,7 @@ def format_help_telegram() -> str:
         "• `/status` - Mostra conexões e estado atual de segurança.\n"
         "• `/clear` - Limpa o histórico de conversa com o agente.\n"
         "• `/history <limite>` - Exibe ou altera o tamanho do histórico.\n"
-        "• `/models` - Lista e altera os modelos no LM Studio.\n"
+        "• `/models` - Lista e altera os modelos de LLM (locais ou externos).\n"
         "• `/safe` / `/unsafe` - Ativa ou desativa o Modo Seguro.\n"
         "• `/notes` - Lista todas as anotações salvas.\n"
         "• `/finance` - Resumo financeiro do mês atual.\n"
@@ -231,19 +238,19 @@ def reply_formatted(message, text):
         formatted_text = format_markdown_for_telegram(text)
         bot.reply_to(message, formatted_text, parse_mode="Markdown")
     except Exception as e:
-        print(f"[Warning] Falha ao renderizar Markdown no Telegram: {e}")
+        logging.warning("Falha ao renderizar Markdown no Telegram: %s", e)
         try:
             bot.reply_to(message, text)
         except Exception as e_fallback:
-            print(f"[ERROR] Falha crítica ao enviar mensagem: {e_fallback}")
+            logging.error("Falha crítica ao enviar mensagem: %s", e_fallback)
 
 @bot.message_handler(func=lambda msg: True)
 def handle_incoming_message(message):
     sender_username = message.from_user.username or "SemUsername"
-    print(f"[REQUISICAO] Mensagem recebida de @{sender_username} (ID: {message.chat.id}): '{message.text}'")
+    logging.info("Mensagem recebida de @%s (ID: %s): '%s'", sender_username, message.chat.id, message.text)
     
     if not is_authorized(message):
-        print(f"[BLOQUEADO] Tentativa de acesso não autorizada de Chat ID: {message.chat.id} (@{sender_username})")
+        logging.warning("Tentativa de acesso não autorizada de Chat ID: %s (@%s)", message.chat.id, sender_username)
         bot.reply_to(message, "Acesso negado. Este bot do agente é privado.")
         return
         
@@ -269,7 +276,7 @@ def handle_incoming_message(message):
         
         # Filtros e roteamentos personalizados para exibir layouts bonitos no celular
         try:
-            if cmd == "/help":
+            if cmd == "/help" or cmd == "/start":
                 bot.reply_to(message, format_help_telegram(), parse_mode="Markdown")
                 return
             elif cmd == "/notes":
@@ -283,6 +290,9 @@ def handle_incoming_message(message):
                 return
             elif cmd == "/transcrever":
                 handle_transcrever_command(message, parts)
+                return
+            elif cmd == "/models":
+                handle_models_command(message, parts)
                 return
             elif cmd == "/finance":
                 # Verifica se é uma listagem/filtro normal ou uma ação (delete, restore, import, card add/buy)
@@ -322,17 +332,18 @@ def handle_incoming_message(message):
                     clean_output = clean_output[:3900] + "\n... (saída longa truncada)"
                 bot.reply_to(message, clean_output)
         except Exception as e:
+            logging.exception("Erro ao executar comando: %s", text)
             bot.reply_to(message, f"Erro ao executar comando: {e}")
             
     else:
         # Conversa normal com o Agente (Pensamento + Execução Silenciosa de Ferramentas)
         bot.send_chat_action(message.chat.id, 'typing')
         try:
-            telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
-            telegram_prompt = f"{text}{telegram_instruction}"
+            telegram_prompt = f"{text}{TELEGRAM_INSTRUCTION}"
             response = agent.process_agent_turn_silent(telegram_prompt)
             reply_formatted(message, response)
         except Exception as e:
+            logging.exception("Erro no processamento da conversa para a mensagem: %s", text)
             bot.reply_to(message, f"Erro no processamento da conversa: {e}")
 
 def escape_markdown(text: str) -> str:
@@ -360,11 +371,10 @@ def process_custom_audio_instruction(message, instruction):
     bot.reply_to(message, "✍️ Processando transcrição com sua instrução personalizada...")
     
     try:
-        telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
         prompt = (
             f"Processar a seguinte transcrição de áudio seguindo a instrução: {instruction}\n\n"
             f"Transcrição:\n{transcription}"
-            f"{telegram_instruction}"
+            f"{TELEGRAM_INSTRUCTION}"
         )
         response = agent.process_agent_turn_silent(prompt)
         
@@ -495,6 +505,114 @@ def handle_transcrever_command(message, parts):
     except Exception as e:
         print(f"[ERROR] Falha geral ao transcrever arquivo manual: {e}")
         bot.reply_to(message, f"❌ Erro no processamento do arquivo de áudio: {e}")
+
+def handle_models_command(message, parts):
+    chat_id = message.chat.id
+    
+    if len(parts) == 1:
+        llm_provider = db.get_setting("llm_provider", "lm_studio")
+        active_model = db.get_setting("active_model", "Nenhum")
+        
+        linhas = [
+            "🤖 *Configuração do Modelo de Linguagem (LLM)*",
+            f"• Provedor atual: *{llm_provider.upper()}*",
+            f"• Modelo atual: *{active_model}*\n",
+            "💡 *Como alterar o modelo via Telegram:*",
+            "1️⃣ *LM Studio (Local)*:",
+            "   └─ Digite `/models lm_studio` para ver os modelos carregados localmente.",
+            "   └─ Digite `/models lm_studio <nome_do_modelo>` para ativar.",
+            "",
+            "2️⃣ *Provedores Externos*:",
+            "   └─ Digite `/models <provedor> <API_KEY> [modelo]`",
+            "   └─ *Provedores suportados:* `openai`, `gemini`, `claude`, `deepseek`, `qwen`, `kimi`",
+            "   └─ *Exemplo:* `/models openai sk-proj-... gpt-4o-mini`",
+            "",
+            "3️⃣ *Provedor Personalizado (OpenAI-Compatible)*:",
+            "   └─ Digite `/models custom <API_KEY> <URL_BASE> <modelo>`",
+            "   └─ *Exemplo:* `/models custom sk-key http://192.168.1.50:8000/v1 meu-modelo-lhamas`"
+        ]
+        bot.reply_to(message, "\n".join(linhas), parse_mode="Markdown")
+        return
+        
+    provider = parts[1].lower()
+    
+    if provider == "lm_studio":
+        from meu_agente_cli import llm
+        models = llm.get_available_models()
+        if len(parts) == 2:
+            if not models:
+                bot.reply_to(message, "❌ Nenhum modelo ativo detectado no LM Studio local. Certifique-se de que o LM Studio está aberto e com um modelo carregado.")
+                return
+                
+            linhas = ["🤖 *Modelos disponíveis no LM Studio:*"]
+            for m in models:
+                linhas.append(f"• `{m}`")
+            linhas.append("\n👉 Para ativar um deles, digite: `/models lm_studio <nome_do_modelo>`")
+            bot.reply_to(message, "\n".join(linhas), parse_mode="Markdown")
+            return
+        else:
+            model_name = " ".join(parts[2:])
+            if model_name not in models:
+                # Se não bater exatamente, verifica se é substring ou aceita direto
+                matched = [m for m in models if model_name.lower() in m.lower()]
+                if len(matched) == 1:
+                    model_name = matched[0]
+                elif len(matched) > 1:
+                    bot.reply_to(message, f"❓ Modelo ambíguo. Encontrados:\n" + "\n".join([f"• `{m}`" for m in matched]))
+                    return
+            
+            db.set_setting("llm_provider", "lm_studio")
+            db.set_setting("active_model", model_name)
+            bot.reply_to(message, f"✅ Provedor alterado para *LM Studio* e modelo ativo para `{model_name}`.", parse_mode="Markdown")
+            return
+            
+    elif provider in ["openai", "gemini", "claude", "deepseek", "qwen", "kimi"]:
+        if len(parts) < 3:
+            bot.reply_to(message, f"❌ Uso correto: `/models {provider} <API_KEY> [modelo]`")
+            return
+            
+        api_key = parts[2]
+        
+        default_models = {
+            "openai": "gpt-4o-mini",
+            "gemini": "gemini-1.5-flash",
+            "claude": "claude-3-5-sonnet-latest",
+            "deepseek": "deepseek-chat",
+            "qwen": "qwen-plus",
+            "kimi": "moonshot-v1-8k"
+        }
+        
+        model_name = parts[3] if len(parts) > 3 else default_models.get(provider, "")
+        
+        db.set_setting("llm_provider", provider)
+        db.set_setting("provider_api_key", api_key)
+        db.set_setting("active_model", model_name)
+        
+        bot.reply_to(message, f"✅ Provedor alterado para *{provider.upper()}*.\n🔑 API Key salva no banco de dados.\n🤖 Modelo ativo: `{model_name}`.", parse_mode="Markdown")
+        return
+        
+    elif provider == "custom":
+        if len(parts) < 5:
+            bot.reply_to(message, "❌ Uso correto: `/models custom <API_KEY> <URL_BASE> <modelo>`\nUse `none` na API KEY se não for necessária autenticação.")
+            return
+            
+        api_key = parts[2]
+        base_url = parts[3]
+        model_name = " ".join(parts[4:])
+        
+        if api_key.lower() == "none":
+            api_key = ""
+            
+        db.set_setting("llm_provider", "custom")
+        db.set_setting("provider_api_key", api_key)
+        db.set_setting("provider_base_url", base_url)
+        db.set_setting("active_model", model_name)
+        
+        bot.reply_to(message, f"✅ Provedor alterado para *CUSTOM*.\n🌐 URL Base: `{base_url}`\n🤖 Modelo ativo: `{model_name}`.", parse_mode="Markdown")
+        return
+        
+    else:
+        bot.reply_to(message, "❌ Provedor desconhecido. Use `/models` para ver a lista de opções.")
 
 def handle_reunioes_command(message, parts):
     chat_id = message.chat.id
@@ -768,8 +886,7 @@ def handle_audio_action(call):
         bot.send_message(chat_id, "📝 Gerando resumo simples...")
         bot.send_chat_action(chat_id, 'typing')
         try:
-            telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
-            prompt = f"Faça um resumo simples e direto da seguinte transcrição de áudio:\n\n{transcription}{telegram_instruction}"
+            prompt = f"Faça um resumo simples e direto da seguinte transcrição de áudio:\\n\\n{transcription}{TELEGRAM_INSTRUCTION}"
             response = agent.process_agent_turn_silent(prompt)
             
             db.save_audio_transcription(chat_id, audio_path, transcription, "Resumo Simples", response)
@@ -783,11 +900,10 @@ def handle_audio_action(call):
         bot.send_message(chat_id, "📌 Gerando principais pontos e plano de ação...")
         bot.send_chat_action(chat_id, 'typing')
         try:
-            telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
             prompt = (
                 f"Analise a seguinte transcrição de áudio e forneça um resumo estruturado contendo "
                 f"os principais pontos discutidos e um plano de ação detalhado com os próximos passos:\n\n"
-                f"{transcription}{telegram_instruction}"
+                f"{transcription}{TELEGRAM_INSTRUCTION}"
             )
             response = agent.process_agent_turn_silent(prompt)
             
@@ -931,15 +1047,13 @@ def handle_document_upload(message):
             text_content = text_content[:25000] + "\n\n... (conteúdo longo do arquivo truncado para análise) ..."
             
         caption = message.caption.strip() if message.caption else "Analise e resuma o conteúdo deste arquivo."
-        
-        telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
         user_prompt = (
             f"[Arquivo Anexado: {file_name}]\n"
             f"--- Início do Conteúdo do Arquivo ---\n"
             f"{text_content}\n"
             f"--- Fim do Conteúdo do Arquivo ---\n\n"
             f"Instrução do Usuário: {caption}"
-            f"{telegram_instruction}"
+            f"{TELEGRAM_INSTRUCTION}"
         )
         
         bot.reply_to(message, f"📖 Arquivo `{file_name}` processado ({len(text_content)} caracteres). Enviando para análise da inteligência artificial...")
@@ -966,33 +1080,48 @@ def handle_photo_upload(message):
         file_info = bot.get_file(photo.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         
+        # Salva o arquivo físico em uploads/archive
+        archive_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "uploads", "archive"))
+        os.makedirs(archive_dir, exist_ok=True)
+        timestamp = int(time.time())
+        filename = f"image_{timestamp}.jpg"
+        image_path = os.path.join(archive_dir, filename)
+        
+        with open(image_path, "wb") as f_img:
+            f_img.write(downloaded_file)
+            
         # Codifica a imagem em base64
         base64_str = base64.b64encode(downloaded_file).decode('utf-8')
         
         # Legenda/pergunta do usuário
         caption = message.caption.strip() if message.caption else "O que está nesta imagem? Descreva e analise em detalhes."
         
-        telegram_instruction = "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Formate sua resposta com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular.]"
+        # Informa o caminho da imagem no prompt para que a LLM o utilize em ferramentas se necessário
+        image_info = f"\n\n[IMAGEM SALVA NO SERVIDOR: O arquivo físico desta imagem foi salvo no caminho: {image_path}]"
+        
         # Monta a estrutura da mensagem multimodal
         multimodal_prompt = [
-            {"type": "text", "text": f"{caption}{telegram_instruction}"},
+            {"type": "text", "text": f"Questão:{caption}\n\nInstruções adicionais: não utilize nenhuma ferramenta, apenas responda a questão."},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_str}"}}
         ]
         
         bot.reply_to(message, "📸 Imagem recebida e codificada. Enviando para análise visual da inteligência artificial...")
         
-        response = agent.process_agent_turn_silent(multimodal_prompt)
+        response = agent.process_agent_turn_silent(multimodal_prompt, use_sys_prompt=False, use_history=False)
         reply_formatted(message, response)
         
     except Exception as e:
+        logging.exception(f"Erro ao processar a imagem recebida: {e}")
         bot.reply_to(message, f"❌ Ocorreu um erro ao processar a imagem: {e}")
 
 if __name__ == "__main__":
     # Inicializa banco de dados, LLM e segurança do projeto apenas quando executado diretamente
     if not initialize_components():
+        logging.critical("Falha ao inicializar componentes críticos do agente.")
         print("[ERRO] Falha ao inicializar componentes críticos do agente.")
         sys.exit(1)
 
+    logging.info("Bot do Telegram do Meu Agente CLI Iniciado com Sucesso!")
     print(f"===========================================================")
     print(f"Bot do Telegram do Meu Agente CLI Iniciado com Sucesso!")
     print(f"IDs Autorizados cadastrados: {authorized_ids}")

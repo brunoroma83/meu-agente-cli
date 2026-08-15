@@ -226,6 +226,7 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
                         
                         # Importa o módulo dinamicamente e executa a função
                         module = importlib.import_module(python_module)
+                        importlib.reload(module)  # Garante que as atualizações do arquivo físico sejam lidas
                         func = getattr(module, function_name)
                         result = func(**args)
                         return result
@@ -236,7 +237,7 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
     except Exception as e:
         return f"Erro na execução da ferramenta '{tool_name}': {str(e)}"
 
-def process_agent_turn_silent(user_input: Any) -> str:
+def process_agent_turn_silent(user_input: Any, use_sys_prompt: bool = True, use_history:bool=True) -> str:
     """
     Executa um turno completo de pensamento do agente de forma silenciosa.
     Ideal para integrações como Telegram, onde não queremos poluir o console do sistema.
@@ -249,12 +250,16 @@ def process_agent_turn_silent(user_input: Any) -> str:
     silent_console = Console(color_system=None, force_terminal=False)
     
     messages = []
-    messages.append({"role": "system", "content": llm.SYSTEM_PROMPT})
-    for sender, msg in history:
-        messages.append({"role": sender, "content": msg})
+    if use_sys_prompt:
+        messages.append({"role": "system", "content": llm.SYSTEM_PROMPT})
+    else:
+        messages.append({"role": "system", "content": "Você é um assistente de engenharia clínica que analisa questões e responde de forma objetiva"})
+    if use_history:
+        for sender, msg in history:
+            messages.append({"role": sender, "content": msg})
     messages.append({"role": "user", "content": user_input})
     
-    max_turns = 10
+    max_turns = 15
     for turn in range(max_turns):
         # Conversa síncrona com o LLM (sem streaming)
         response_text = llm.chat_completion(model, messages, stream=False)

@@ -19,6 +19,16 @@
       "prompt_instruction": "11. search_docs_tool (Pesquisar instruções e documentações de funcionamento do agente na pasta docs/ para responder a dúvidas de uso do usuário):\n{\n  \"tool\": \"search_docs_tool\",\n  \"args\": {\n    \"query\": \"termo de busca para pesquisar nas instruções [opcional]\"\n  }\n}",
       "python_module": "meu_agente_cli.custom_tools.search_docs_tool",
       "function_name": "run"
+    },
+    "vinho_tool": {
+      "prompt_instruction": "12. vinho_tool (Gerenciar vinhos):\n{\n  \"tool\": \"vinho_tool\",\n  \"args\": {\n    \"action\": \"criar | atualizar | buscar\",\n    \"id\": \"[ID do vinho]\",\n    \"nome\": \"[Nome do vinho]\",\n    \"ano\": \"[Ano do vinho]\",\n    \"regiao\": \"[Região do vinho]\",\n    \"tipo\": \"[Tipo de vinho]\",\n    \"nota\": \"[Nota do vinho]\",\n    \"valor_compra\": \"[Valor da compra]\",\n    \"foto_vinho\": \"[URL da foto]\",\n    \"data_compra\": \"[Data da compra]\",\n    \"observacoes\": \"[Observações]\",\n    \"informacoes\": \"[Informações]\"\n  }\n}",
+      "python_module": "meu_agente_cli.custom_tools.vinho_tool",
+      "function_name": "run"
+    },
+    "tecnovigilancia_tool": {
+      "prompt_instruction": "13. tecnovigilancia_tool (Pesquisar alertas de tecnovigilancia):\n{\n  \"tool\": \"tecnovigilancia_tool\",\n  \"args\": {\n    \"query\": \"palavra de busca\"\n  }\n}",
+      "python_module": "meu_agente_cli.custom_tools.tecnovigilancia_tool",
+      "function_name": "run"
     }
   }
 }

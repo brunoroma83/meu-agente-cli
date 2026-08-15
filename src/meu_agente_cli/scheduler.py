@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 import sys
 from datetime import datetime
@@ -117,14 +118,17 @@ async def run_and_log_job(job_id: int, name: str, prompt: str):
     Executa a tarefa do subagente e salva o log na base de dados de anotações
     para auditoria do usuário, além de imprimir uma notificação no console.
     """
+    logging.info("Cron: Iniciando execução do subagente '%s' (ID Cron: %s)", name, job_id)
     try:
         log = await run_subagent_loop(prompt)
         # Salva o log nas notas para que o usuário possa consultar depois
         db.add_user_note(f"LOG SUBAGENTE '{name}' (ID Cron: {job_id}):\n{log}")
+        logging.info("Cron: Subagente '%s' (ID Cron: %s) executado com sucesso.", name, job_id)
         # Notifica discretamente no stderr (ou log do console)
         print(f"\n[CRON] Subagente '{name}' executado com sucesso! Log salvo nas notas.\n> ", end="", file=sys.stderr)
     except Exception as e:
         db.add_user_note(f"LOG SUBAGENTE '{name}' (ID Cron: {job_id}) FALHOU:\n{str(e)}")
+        logging.exception("Cron: Subagente '%s' (ID Cron: %s) falhou", name, job_id)
         print(f"\n[CRON ERROR] Subagente '{name}' falhou: {e}\n> ", end="", file=sys.stderr)
 
 async def scheduler_loop():
@@ -135,11 +139,13 @@ async def scheduler_loop():
         try:
             await check_and_run_jobs()
         except Exception as e:
+            logging.exception("Cron: Erro fatal no loop de agendamento")
             print(f"[CRON FATAL] Erro no loop de agendamento: {e}", file=sys.stderr)
         await asyncio.sleep(10)
 
 def start_scheduler():
     """Inicia o agendador em uma thread dedicada com seu próprio event loop."""
+    logging.info("Cron: Iniciando o agendador de tarefas em segundo plano...")
     def run_in_thread():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
