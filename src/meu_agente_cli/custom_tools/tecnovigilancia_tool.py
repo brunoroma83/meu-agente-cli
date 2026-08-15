@@ -45,8 +45,8 @@ def buscar_alertas(**kwargs):
             
             result = cur.fetchall()
 
-            # Escrita segura e estruturada do log se houver resultados
-            if result:
+            # salva em disco resultado da busca para análise do desenvolvedor (desabilitado)
+            if result and False:
                 nome_seguro = sanitizar_nome_arquivo(query)
                 caminho_arquivo = f"./alertas_tecnovigilancia_{nome_seguro}.txt"
                 try:
