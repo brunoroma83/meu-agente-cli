@@ -5,7 +5,8 @@ import time
 import sys
 import getpass
 import json
-from datetime import datetime
+from decimal import Decimal
+from datetime import datetime, date
 from typing import List, Tuple, Dict, Any, Optional
 import psycopg
 from psycopg import Connection
@@ -277,6 +278,31 @@ def init_database() -> bool:
                     llm_response TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     active BOOLEAN DEFAULT TRUE
+                )
+            """)
+
+            # 8. Cadastro Usuários
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    user_name VARCHAR(100) NOT NULL UNIQUE,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # 9. Tabela de Perfil do Usuário 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_profile (
+                    user_id INT NOT NULL,
+                    category VARCHAR(50) NOT NULL,
+                    content TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT pk_user_profile
+                        PRIMARY KEY (user_id, category),
+                    CONSTRAINT fk_user_profile
+                        FOREIGN KEY (user_id)
+                        REFERENCES users(user_id)
+                        ON DELETE CASCADE
                 )
             """)
             
@@ -741,65 +767,105 @@ def delete_cron_job(job_id: int) -> bool:
         print(f"[ERROR] Erro ao desativar cronjob: {e}", file=sys.stderr)
         return False
 
+def _format_sql_value(val: Any) -> str:
+    """Formata um valor Python para uma representação SQL literal segura."""
+    if val is None:
+        return "NULL"
+    if isinstance(val, bool):
+        return "TRUE" if val else "FALSE"
+    if isinstance(val, (int, float, Decimal)):
+        return str(val)
+    if isinstance(val, datetime):
+        return f"'{val.strftime('%Y-%m-%d %H:%M:%S')}'"
+    if isinstance(val, date):
+        return f"'{val.strftime('%Y-%m-%d')}'"
+    if isinstance(val, (dict, list)):
+        escaped = json.dumps(val, ensure_ascii=False).replace("'", "''")
+        return f"'{escaped}'"
+    if isinstance(val, bytes):
+        hex_str = val.hex()
+        return f"decode('{hex_str}', 'hex')"
+    val_str = str(val).replace("'", "''")
+    return f"'{val_str}'"
+
 def generate_sql_dump() -> str:
     """Gera um dump SQL portátil contendo todos os dados e estruturas do banco."""
     conn = get_connection()
-    dump = []
+    dump = ["BEGIN;"]
     
-    # Ordem das tabelas para limpeza e inserção segura
-    tables = ["settings", "user_notes", "financial_records", "cron_jobs"]
+    # Ordem das tabelas para limpeza segura (tabelas dependentes/filhas antes das mães)
+    tables_delete_order = [
+        "user_profile",        # FK para users
+        "users",
+        "tecnovigilancia",
+        "investimentos",
+        "audio_transcriptions",
+        "cron_jobs",
+        "financial_records",
+        "user_notes",
+        "vinhos",
+        "chat_history",
+        "settings",
+    ]
     
-    for t in reversed(tables):
-        dump.append(f"DELETE FROM {t};")
-        
-    with conn.cursor() as cur:
-        # Settings
-        cur.execute("SELECT key, value FROM settings")
-        for key, val in cur.fetchall():
-            val_esc = val.replace("'", "''")
-            dump.append(f"INSERT INTO settings (key, value) VALUES ('{key}', '{val_esc}');")
+    try:
+        with conn.cursor() as cur:
+            # Descobre quais tabelas realmente existem no schema public
+            cur.execute("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public'
+            """)
+            existing_tables = {row[0] for row in cur.fetchall()}
             
-        # User Notes
-        cur.execute("SELECT id, content, created_at, active FROM user_notes")
-        for nid, content, created_at, active in cur.fetchall():
-            content_esc = content.replace("'", "''")
-            dt_str = created_at.strftime("%Y-%m-%d %H:%M:%S")
-            dump.append(
-                f"INSERT INTO user_notes (id, content, created_at, active) "
-                f"VALUES ({nid}, '{content_esc}', '{dt_str}', {active});"
-            )
+            # Filtra apenas tabelas existentes
+            active_delete_tables = [t for t in tables_delete_order if t in existing_tables]
             
-        # Financial Records
-        cur.execute("SELECT id, type, category, amount, description, date, due_date, active FROM financial_records")
-        for rid, rtype, cat, amount, desc, dt, due_date, active in cur.fetchall():
-            desc_esc = desc.replace("'", "''") if desc else ""
-            cat_esc = cat.replace("'", "''")
-            date_str = dt.strftime("%Y-%m-%d")
-            due_date_str = f"'{due_date.strftime('%Y-%m-%d')}'" if due_date else "NULL"
-            dump.append(
-                f"INSERT INTO financial_records (id, type, category, amount, description, date, due_date, active) "
-                f"VALUES ({rid}, '{rtype}', '{cat_esc}', {amount}, '{desc_esc}', '{date_str}', {due_date_str}, {active});"
-            )
+            # 1. Comandos de limpeza (ordem reversa de dependência)
+            for t in active_delete_tables:
+                dump.append(f"DELETE FROM {t};")
+                
+            # 2. Inserção de dados (ordem direta: mães antes de filhas)
+            for table in reversed(active_delete_tables):
+                cur.execute(f"SELECT * FROM {table}")
+                rows = cur.fetchall()
+                if not rows:
+                    continue
+                    
+                col_names = [desc[0] for desc in cur.description]
+                cols_str = ", ".join(col_names)
+                override = " OVERRIDING SYSTEM VALUE" if table in ["users", "tecnovigilancia"] else ""
+                
+                for row in rows:
+                    formatted_vals = [_format_sql_value(v) for v in row]
+                    vals_str = ", ".join(formatted_vals)
+                    dump.append(f"INSERT INTO {table} ({cols_str}){override} VALUES ({vals_str});")
+                    
+            # 3. Sincronização de sequences / auto-incrementos
+            sequence_tables = [
+                ("user_notes", "id"),
+                ("financial_records", "id"),
+                ("cron_jobs", "id"),
+                ("investimentos", "id"),
+                ("audio_transcriptions", "id"),
+                ("chat_history", "id"),
+                ("vinhos", "id"),
+                ("users", "user_id"),
+                ("tecnovigilancia", "id"),
+            ]
             
-        # Cron Jobs
-        cur.execute("SELECT id, name, cron_expression, next_run, last_run, task_prompt, status, active FROM cron_jobs")
-        for cid, name, cron_expression, next_run, last_run, task_prompt, status, active in cur.fetchall():
-            name_esc = name.replace("'", "''")
-            expr_esc = cron_expression.replace("'", "''")
-            prompt_esc = task_prompt.replace("'", "''")
-            next_run_str = next_run.strftime("%Y-%m-%d %H:%M:%S")
-            last_run_str = f"'{last_run.strftime('%Y-%m-%d %H:%M:%S')}'" if last_run else "NULL"
-            dump.append(
-                f"INSERT INTO cron_jobs (id, name, cron_expression, next_run, last_run, task_prompt, status, active) "
-                f"VALUES ({cid}, '{name_esc}', '{expr_esc}', '{next_run_str}', {last_run_str}, '{prompt_esc}', '{status}', {active});"
-            )
-            
-        # Sincroniza as sequências de ID seriais para evitar colisões
-        for table in ["user_notes", "financial_records", "cron_jobs"]:
-            dump.append(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), COALESCE(MAX(id), 1)) FROM {table};")
-            
-    conn.close()
-    return "\n".join(dump)
+            for table, pk in sequence_tables:
+                if table in existing_tables:
+                    dump.append(
+                        f"SELECT setval(pg_get_serial_sequence('{table}', '{pk}'), "
+                        f"COALESCE((SELECT MAX({pk}) FROM {table}), 1), "
+                        f"(SELECT (MAX({pk}) IS NOT NULL) FROM {table}));"
+                    )
+                    
+        dump.append("COMMIT;")
+        return "\n".join(dump)
+    finally:
+        conn.close()
 
 def restore_sql_dump(sql_content: str) -> bool:
     """Executa o script SQL de restauração dentro de uma transação atômica."""
@@ -940,3 +1006,138 @@ def restore_audio_transcription(chat_id: int, doc_id: int) -> bool:
         print(f"[ERROR] Erro ao reativar transcrição de áudio #{doc_id}: {e}", file=sys.stderr)
         return False
 
+def get_or_create_user(user_name: str = "default") -> int:
+    """Retorna o user_id para o nome de usuário fornecido. Se não existir, cria-o."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            # Verifica se o usuário já existe
+            cur.execute("SELECT user_id FROM users WHERE user_name = %s", (user_name,))
+            res = cur.fetchone()
+            if res:
+                user_id = res[0]
+            else:
+                # Insere o novo usuário
+                cur.execute("INSERT INTO users (user_name) VALUES (%s) RETURNING user_id", (user_name,))
+                user_id = cur.fetchone()[0]
+        conn.commit()
+        conn.close()
+        return user_id
+    except Exception as e:
+        print(f"[ERROR] Erro ao obter/criar usuário '{user_name}': {e}", file=sys.stderr)
+        return 1  # ID fallback seguro para evitar quebras
+
+def save_user_profile(category: str, content: str, user_name: str = "default") -> bool:
+    """Insere ou atualiza o perfil do usuário para uma determinada categoria e usuário."""
+    try:
+        user_id = get_or_create_user(user_name)
+        cat_clean = clean_string(category).strip().lower()
+        content_clean = clean_string(content).strip()
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO user_profile (user_id, category, content, updated_at) VALUES (%s, %s, %s, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (user_id, category) DO UPDATE SET content = EXCLUDED.content, updated_at = CURRENT_TIMESTAMP",
+                (user_id, cat_clean, content_clean)
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao salvar perfil do usuário ({category} para {user_name}): {e}", file=sys.stderr)
+        return False
+
+def get_user_profile(category: Optional[str] = None, user_name: str = "default") -> Any:
+    """
+    Retorna o perfil do usuário especificado.
+    Se category for informado, retorna a string de conteúdo (ou None se não existir).
+    Se category for None, retorna um dicionário com todas as categorias e seus respectivos conteúdos.
+    """
+    try:
+        user_id = get_or_create_user(user_name)
+        conn = get_connection()
+        with conn.cursor() as cur:
+            if category:
+                cat_clean = clean_string(category).strip().lower()
+                cur.execute("SELECT content FROM user_profile WHERE user_id = %s AND category = %s", (user_id, cat_clean))
+                res = cur.fetchone()
+                conn.close()
+                return res[0] if res else None
+            else:
+                cur.execute("SELECT category, content FROM user_profile WHERE user_id = %s ORDER BY category ASC", (user_id,))
+                rows = cur.fetchall()
+                conn.close()
+                return {row[0]: row[1] for row in rows}
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar perfil do usuário para {user_name}: {e}", file=sys.stderr)
+        return None if category else {}
+
+def delete_user_profile(category: str, user_name: str = "default") -> bool:
+    """Deleta o registro de perfil de uma categoria para o usuário especificado."""
+    try:
+        user_id = get_or_create_user(user_name)
+        cat_clean = clean_string(category).strip().lower()
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM user_profile WHERE user_id = %s AND category = %s", (user_id, cat_clean))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao deletar perfil do usuário ({category} para {user_name}): {e}", file=sys.stderr)
+        return False
+
+def login_user(user_name: str) -> bool:
+    """Registra o login do usuário com validade de 24 horas."""
+    try:
+        # Garante que o usuário exista
+        get_or_create_user(user_name)
+        
+        # Define expiração para 24 horas a partir de agora
+        expires_at = time.time() + (24 * 3600)
+        
+        set_setting("logged_in_user", user_name)
+        set_setting("login_expires_at", str(expires_at))
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao realizar login do usuário '{user_name}': {e}", file=sys.stderr)
+        return False
+
+def logout_user() -> bool:
+    """Remove a sessão do usuário logado do sistema."""
+    try:
+        set_setting("logged_in_user", "")
+        set_setting("login_expires_at", "")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao realizar logout: {e}", file=sys.stderr)
+        return False
+
+def get_logged_in_user() -> Optional[str]:
+    """Retorna o nome do usuário logado se a sessão for válida, senão expira a sessão e retorna None."""
+    try:
+        user = get_setting("logged_in_user")
+        expires_at_str = get_setting("login_expires_at")
+        
+        if not user or not expires_at_str:
+            return None
+            
+        try:
+            expires_at = float(expires_at_str)
+        except ValueError:
+            logout_user()
+            return None
+            
+        # Verifica expiração
+        if time.time() > expires_at:
+            logout_user()
+            return None
+            
+        return user
+    except Exception:
+        return None
+
+def get_active_username() -> str:
+    """Retorna o usuário atualmente logado ou 'default' como fallback."""
+    logged_user = get_logged_in_user()
+    return logged_user if logged_user else "default"

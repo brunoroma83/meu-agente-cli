@@ -29,6 +29,16 @@
       "prompt_instruction": "13. tecnovigilancia_tool (Pesquisar alertas de tecnovigilancia):\n{\n  \"tool\": \"tecnovigilancia_tool\",\n  \"args\": {\n    \"query\": \"palavra de busca\"\n  }\n}",
       "python_module": "meu_agente_cli.custom_tools.tecnovigilancia_tool",
       "function_name": "run"
+    },
+    "scrape_tecnovigilancia_tool": {
+      "prompt_instruction": "14. scrape_tecnovigilancia_tool (Executar varredura/scraping para buscar novos alertas de tecnovigilância no site da ANVISA e salvá-los no banco de dados. Sempre use esta ferramenta se o usuário pedir para buscar novos alertas do site ou atualizar a base executando o scraper):\n{\n  \"tool\": \"scrape_tecnovigilancia_tool\",\n  \"args\": {}\n}",
+      "python_module": "meu_agente_cli.custom_tools.scrape_tecnovigilancia",
+      "function_name": "run"
+    },
+    "cron_tool": {
+      "prompt_instruction": "15. cron_tool (Gerenciar agendamentos de tarefas/cron jobs para subagentes em segundo plano. Sempre use esta ferramenta se o usuário pedir para agendar, programar, listar ou remover tarefas automatizadas/periódicas):\n{\n  \"tool\": \"cron_tool\",\n  \"args\": {\n    \"action\": \"add | list | delete\",\n    \"name\": \"Nome amigável da tarefa [obrigatório para action=add]\",\n    \"cron_expression\": \"Expressão cron ex: '*/5 * * * *' para cada 5 min [obrigatório para action=add]\",\n    \"task_prompt\": \"Instrução em linguagem natural que o subagente executará de tempos em tempos [obrigatório para action=add]\",\n    \"job_id\": 123  // ID da tarefa [obrigatório para action=delete]\n  }\n}",
+      "python_module": "meu_agente_cli.custom_tools.cron_tool",
+      "function_name": "run"
     }
   }
 }

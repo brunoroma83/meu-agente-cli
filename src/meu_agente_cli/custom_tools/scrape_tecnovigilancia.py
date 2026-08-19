@@ -6,7 +6,7 @@ import meu_agente_cli.db as db
                                                                                                                                                    
 # Configurações
 BASE_URL = 'https://www.anvisa.gov.br/sistec/Alerta/RelatorioAlerta.asp?NomeColuna=CO_SEQ_ALERTA&Parametro={}'
-MAX_ITERATIONS = 300
+MAX_ITERATIONS = 30
 
 
 def tratar_texto(texto: str) -> str:
@@ -93,6 +93,9 @@ def scrape_and_save():
         # caso contrário, o for deve parar
         
         url = BASE_URL.format(i)
+        
+        # inicia lista resposta
+        lista_resposta = []
                                                                                                                                                 
         try:
             response = requests.get(url, headers=headers, timeout=15)
@@ -124,11 +127,11 @@ def scrape_and_save():
                 print(f"[Sem Tabela] i={i} - Não encontrou tabela na página.")
                 continue
 
-            # retirar informação de data da ocorrência
+            #retirar informação de data da ocorrência
             linhas = table.split('\n')
             for j in range(len(linhas)):
                 if 'data ocorrência' in linhas[j].lower():
-                    data_str = linhas[j+1].strip()
+                    data_str = linhas[j+1].strip()[:10]
                     data_obj = datetime.strptime(data_str, '%d/%m/%Y').date()
                     break
             
@@ -146,7 +149,7 @@ def scrape_and_save():
                 (i, data_obj, conteudo_tratado)
             )                                                                                                                              
             conn.commit()
-            print(f"[OK] i={i} - Dados processados.")
+            lista_resposta.append(f"Alerta encontrado: {i}")
                                                                                                                                                 
         except Exception as e:
             print(f"[Erro] i={i} - {str(e)}")
@@ -155,7 +158,8 @@ def scrape_and_save():
         time.sleep(0.4)
                                                                                                                                                 
     conn.close()
-    print("Processamento concluído.")
+    lista_resposta.append(f"Foram encontrados um total de {len(lista_resposta)} alertas de tecnovigilância")
+    return "\n".join(lista_resposta)
                                                                                                                                                 
-if __name__ == "__main__":
-    scrape_and_save()
+def run(**kwargs):
+    return scrape_and_save()

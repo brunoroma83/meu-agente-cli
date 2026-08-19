@@ -44,6 +44,14 @@ def is_authorized(message) -> bool:
         return False
     return message.chat.id in authorized_ids
 
+def is_logged_in(message) -> bool:
+    """Verifica se há um usuário logado e ativo no banco."""
+    logged_user = db.get_logged_in_user()
+    if not logged_user:
+        bot.reply_to(message, "⚠️ Acesso negado. Nenhum usuário logado. Por favor, faça login usando `/login <nome_usuario>`.")
+        return False
+    return True
+
 def strip_ansi(text: str) -> str:
     """Remove códigos de cores ANSI do console do Rich."""
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -53,6 +61,8 @@ def format_help_telegram() -> str:
     return (
         "🛡️ *Meu Agente CLI - Comandos Disponíveis:*\n\n"
         "• `/help` - Mostra esta lista de ajuda.\n"
+        "• `/login <nome_usuario>` - Inicia uma sessão de login (válida por 24h).\n"
+        "• `/logout` - Encerra a sessão ativa.\n"
         "• `/status` - Mostra conexões e estado atual de segurança.\n"
         "• `/clear` - Limpa o histórico de conversa com o agente.\n"
         "• `/history <limite>` - Exibe ou altera o tamanho do histórico.\n"
@@ -269,10 +279,15 @@ def handle_incoming_message(message):
             bot.reply_to(message, "Comandos de finalização (/exit, /quit) são desativados via chat remoto.")
             return
             
-        bot.send_chat_action(message.chat.id, 'typing')
-        
         parts = text.split()
         cmd = parts[0].lower()
+        
+        # Comandos permitidos sem login ativo
+        if cmd not in ("/login", "/help", "/start"):
+            if not is_logged_in(message):
+                return
+                
+        bot.send_chat_action(message.chat.id, 'typing')
         
         # Filtros e roteamentos personalizados para exibir layouts bonitos no celular
         try:
@@ -337,6 +352,9 @@ def handle_incoming_message(message):
             
     else:
         # Conversa normal com o Agente (Pensamento + Execução Silenciosa de Ferramentas)
+        if not is_logged_in(message):
+            return
+            
         bot.send_chat_action(message.chat.id, 'typing')
         try:
             telegram_prompt = f"{text}{TELEGRAM_INSTRUCTION}"
@@ -758,6 +776,9 @@ def handle_audio_upload(message):
         bot.reply_to(message, "Acesso negado. Este bot do agente é privado.")
         return
 
+    if not is_logged_in(message):
+        return
+
     bot.send_chat_action(message.chat.id, 'record_audio')
     
     try:
@@ -973,6 +994,9 @@ def handle_document_upload(message):
         bot.reply_to(message, "Acesso negado. Este bot do agente é privado.")
         return
 
+    if not is_logged_in(message):
+        return
+
     bot.send_chat_action(message.chat.id, 'typing')
     
     try:
@@ -1069,6 +1093,9 @@ def handle_photo_upload(message):
     if not is_authorized(message):
         print(f"[BLOQUEADO] Imagem recebida de Chat ID não autorizado: {message.chat.id}")
         bot.reply_to(message, "Acesso negado. Este bot do agente é privado.")
+        return
+
+    if not is_logged_in(message):
         return
 
     bot.send_chat_action(message.chat.id, 'typing')

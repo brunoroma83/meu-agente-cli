@@ -6,8 +6,6 @@ from datetime import datetime
 from croniter import croniter
 import meu_agente_cli.db as db
 import meu_agente_cli.llm as llm
-import meu_agente_cli.tools as tools
-import meu_agente_cli.security as security
 
 # Semáforo para evitar execução simultânea do agendador
 _scheduler_running = False
@@ -48,30 +46,10 @@ async def run_subagent_loop(task_prompt: str) -> str:
         # Executa a ferramenta correspondente
         result = ""
         try:
-            if tool_name == "get_weather":
-                result = tools.get_weather(**args)
-            elif tool_name == "get_financial_quote":
-                result = tools.get_financial_quote(**args)
-            elif tool_name == "get_news":
-                result = tools.get_news(**args)
-            elif tool_name == "finance_tool":
-                result = tools.finance_tool(**args)
-            elif tool_name == "notes_tool":
-                result = tools.notes_tool(**args)
-            elif tool_name == "execute_cli_command":
-                # Subagentes sempre rodam em modo estritamente seguro
-                cmd = args.get("command", "")
-                if security.is_command_safe(cmd):
-                    code, out, err = security.run_bash_command(cmd)
-                    result = f"Código de saída: {code}\nStdout: {out}\nStderr: {err}"
-                else:
-                    result = "Erro de Segurança: Subagentes em segundo plano não têm permissão para executar comandos não-seguros."
-            elif tool_name == "calculator_tool":
-                result = tools.calculator_tool(**args)
-            elif tool_name == "invest_tool":
-                result = tools.invest_tool(**args)
-            else:
-                result = f"Erro: Ferramenta '{tool_name}' desconhecida."
+            from meu_agente_cli.agent import execute_tool_by_name
+            from rich.console import Console
+            dummy_console = Console(color_system=None, force_terminal=False)
+            result = execute_tool_by_name(tool_name, args, dummy_console, allow_interactive=False)
         except Exception as e:
             result = f"Erro na execução da ferramenta '{tool_name}': {str(e)}"
             

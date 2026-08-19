@@ -377,4 +377,64 @@ def invest_tool(**kwargs):
         elif kwargs['action'] == 'update_invest':
             return invest.update_invest(**kwargs)
     return f"Erro: Ação inválida para a ferramenta de investimentos.\nParâmetros recebidos: {kwargs}"
+
+# =====================================================================
+# FERRAMENTA: PERFIL DO USUÁRIO (POSTGRESQL)
+# =====================================================================
+
+def profile_tool(action: str, category: str = "", content: str = "") -> str:
+    """
+    Interface para gerenciar informações do perfil do usuário na memória da sessão atual.
+    Ações: 'save', 'get', 'delete', 'list'
+    Categorias sugeridas: 'familiar', 'profissional', 'academico', 'preferencias', 'rotina', 'desejos', 'politica'
+    """
+    act = action.strip().lower()
+    cat = category.strip().lower()
     
+    # Obtém o usuário ativo na sessão
+    user_name = db.get_logged_in_user()
+    if not user_name:
+        return "Erro: Nenhum usuário logado na sessão ativa. Por favor, faça login antes de usar o perfil."
+    
+    if act == "save":
+        if not cat:
+            return "Erro: Categoria é obrigatória para salvar informações no perfil."
+        if not content:
+            return "Erro: O conteúdo não pode ser vazio ao salvar no perfil."
+        
+        success = db.save_user_profile(cat, content, user_name)
+        if success:
+            return f"[SUCCESS] Perfil atualizado na categoria '{cat}' para o usuário '{user_name}'!"
+        else:
+            return f"[ERROR] Falha ao atualizar perfil na categoria '{cat}' para o usuário '{user_name}'."
+            
+    elif act == "get":
+        if not cat:
+            return "Erro: Categoria é obrigatória para consultar informações do perfil."
+        info = db.get_user_profile(cat, user_name)
+        if info:
+            return f"Informação do perfil na categoria '{cat}' para '{user_name}':\n{info}"
+        else:
+            return f"Nenhuma informação encontrada para a categoria '{cat}' para '{user_name}'."
+            
+    elif act == "delete":
+        if not cat:
+            return "Erro: Categoria é obrigatória para excluir informações do perfil."
+        success = db.delete_user_profile(cat, user_name)
+        if success:
+            return f"[SUCCESS] Categoria '{cat}' removida do perfil com sucesso para o usuário '{user_name}'."
+        else:
+            return f"[ERROR] Falha ao remover categoria '{cat}' do perfil para o usuário '{user_name}'."
+            
+    elif act == "list":
+        profile_data = db.get_user_profile(user_name=user_name)
+        if not profile_data:
+            return f"O perfil do usuário '{user_name}' está vazio."
+        
+        output = [f"Informações atuais do Perfil de '{user_name}':"]
+        for c, val in profile_data.items():
+            output.append(f"- {c.capitalize()}: {val}")
+        return "\n".join(output)
+        
+    else:
+        return "Erro: Ação desconhecida. Use 'save', 'get', 'delete' ou 'list'."

@@ -8,5 +8,7 @@ wheels/
 backups/
 uploads/
 .env
+src/meu_agente_cli/custom_tools/estudos_acoes/
+
 # Virtual environments
 .venv

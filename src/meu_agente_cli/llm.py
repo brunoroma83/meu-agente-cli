@@ -42,7 +42,25 @@ def build_system_prompt() -> str:
                         prompt_parts.append("")
             except Exception as ex:
                 print(f"[WARNING] Falha ao carregar ferramentas customizadas no prompt: {ex}")
-                
+
+        # --- INSERE INFORMAÇÕES DE PERFIL DO USUÁRIO ---
+        try:
+            from meu_agente_cli import db
+            logged_user = db.get_logged_in_user()
+            if logged_user:
+                profile_data = db.get_user_profile(user_name=logged_user)
+                if profile_data:
+                    profile_section = [
+                        f"\n=== PERFIL DO USUÁRIO ({logged_user}) ===",
+                        "Use as informações abaixo para personalizar suas respostas, adaptando-as às preferências, rotina, estudos e contexto do usuário:"
+                    ]
+                    for cat, content in profile_data.items():
+                        profile_section.append(f"- {cat.capitalize()}: {content}")
+                    profile_section.append("=========================\n")
+                    prompt_parts.append("\n".join(profile_section))
+        except Exception as ex:
+            print(f"[WARNING] Falha ao carregar perfil do usuário no prompt: {ex}")
+
         prompt_parts.append(suffix)
         return "\n".join(prompt_parts)
     except Exception as e:

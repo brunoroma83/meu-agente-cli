@@ -145,6 +145,7 @@ def process_agent_turn(user_input: str, console: Console) -> None:
             db.save_chat_message("user", user_input)
             db.save_chat_message("assistant", response_text)
             console.print()  # Quebra de linha final
+            check_and_trigger_memory_extraction()
             break
             
         # Trata chamada de ferramenta
@@ -154,6 +155,7 @@ def process_agent_turn(user_input: str, console: Console) -> None:
             db.save_chat_message("user", user_input)
             db.save_chat_message("assistant", response_text)
             console.print()
+            check_and_trigger_memory_extraction()
             break
             
         tool_name = tool_call.get("tool")
@@ -269,6 +271,7 @@ def process_agent_turn_silent(user_input: Any, use_sys_prompt: bool = True, use_
             # Resposta final do agente
             db.save_chat_message("user", user_input)
             db.save_chat_message("assistant", response_text)
+            check_and_trigger_memory_extraction()
             return response_text
             
         tool_name = tool_call.get("tool")
@@ -282,3 +285,111 @@ def process_agent_turn_silent(user_input: Any, use_sys_prompt: bool = True, use_
         messages.append({"role": "user", "content": f"Resultado da ferramenta {tool_name}:\n{tool_result}"})
         
     return "Erro: O agente excedeu o limite de pensamentos (loop de ferramentas)."
+
+def run_silent_memory_extraction(user_name: str) -> None:
+    """Analisa o histórico recente e atualiza o perfil do usuário em segundo plano."""
+    try:
+        import json
+        import logging
+        from meu_agente_cli import db, llm
+        
+        # 1. Carrega as últimas 20 mensagens (10 turnos)
+        history = db.get_chat_history(limit=20)
+        if not history:
+            return
+            
+        # Formata o histórico para o prompt
+        history_text = []
+        # get_chat_history retorna em ordem DESC (mais recente primeiro).
+        # Vamos inverter para apresentar na ordem correta da conversa
+        for sender, msg in reversed(history):
+            history_text.append(f"{sender.capitalize()}: {msg}")
+        history_formatted = "\n".join(history_text)
+        
+        # 2. Carrega o perfil atual
+        profile_data = db.get_user_profile(user_name=user_name)
+        profile_formatted = json.dumps(profile_data, indent=2, ensure_ascii=False) if profile_data else "Vazio"
+        
+        # 3. Monta as mensagens para o LLM
+        system_prompt = (
+            "Você é um analisador de perfil silencioso em segundo plano para o assistente 'Meu Agente'.\n"
+            "Seu objetivo é analisar o histórico de conversas e extrair informações novas ou atualizar as existentes sobre o usuário.\n"
+            "Categorias válidas: 'familiar', 'profissional', 'academico', 'preferencias', 'rotina', 'desejos', 'politica'.\n\n"
+            "Instruções cruciais:\n"
+            "1. Para cada categoria onde houver novidades, retorne a descrição completa consolidada (mesclando fatos antigos com os novos, mantendo o texto coeso).\n"
+            "2. Não altere categorias que não foram mencionadas ou atualizadas na conversa recente.\n"
+            "3. Responda APENAS com um objeto JSON válido no formato {\"categoria\": \"novo conteúdo consolidado\"}.\n"
+            "4. Se nenhuma categoria precisar de atualização ou nenhuma informação relevante for encontrada, responda EXCLUSIVAMENTE com um JSON vazio: {}.\n"
+            "5. Não adicione nenhuma introdução, explicação ou bloco markdown de código (como ```json). Apenas o JSON puro."
+        )
+        
+        user_prompt = (
+            f"=== PERFIL ATUAL DO USUÁRIO ===\n{profile_formatted}\n\n"
+            f"=== CONVERSA RECENTE ===\n{history_formatted}\n\n"
+            f"Analise a conversa recente e forneça o JSON de atualização:"
+        )
+        
+        model = db.get_setting("active_model", "google/gemma-4-31b-qat")
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        # Chamada síncrona com o LLM
+        response = llm.chat_completion(model, messages, stream=False)
+        
+        # Tenta parsear a resposta do LLM
+        response_clean = response.strip()
+        if response_clean.startswith("```"):
+            lines = response_clean.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines[-1].startswith("```"):
+                lines = lines[:-1]
+            response_clean = "\n".join(lines).strip()
+            
+        if response_clean.startswith("json"):
+            response_clean = response_clean[4:].strip()
+            
+        if not response_clean or response_clean == "{}":
+            return
+            
+        updates = json.loads(response_clean)
+        if isinstance(updates, dict):
+            valid_categories = {'familiar', 'profissional', 'academico', 'preferencias', 'rotina', 'desejos', 'politica'}
+            for cat, content in updates.items():
+                cat_lower = cat.lower().strip()
+                if cat_lower in valid_categories and content:
+                    db.save_user_profile(cat_lower, str(content), user_name)
+                    logging.info(f"[MEMÓRIA SILENCIOSA] Categoria '{cat_lower}' atualizada para o usuário '{user_name}' em segundo plano.")
+                    
+    except Exception as e:
+        import logging
+        logging.error(f"[ERROR] Falha na extração silenciosa de memória: {e}")
+
+def check_and_trigger_memory_extraction() -> None:
+    """Verifica a contagem de mensagens do usuário e dispara a extração em segundo plano se for múltiplo de 5."""
+    import threading
+    try:
+        logged_user = db.get_logged_in_user()
+        if not logged_user:
+            return
+            
+        # Conta mensagens do tipo 'user'
+        conn = db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM chat_history WHERE sender = 'user'")
+            user_msg_count = cur.fetchone()[0]
+        conn.close()
+        
+        # Dispara a cada 5 interações
+        if user_msg_count > 0 and user_msg_count % 5 == 0:
+            threading.Thread(
+                target=run_silent_memory_extraction,
+                args=(logged_user,),
+                daemon=True
+            ).start()
+    except Exception as e:
+        import logging
+        logging.error(f"Erro ao verificar gatilho de memória silenciosa: {e}")
