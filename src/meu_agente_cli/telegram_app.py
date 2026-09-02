@@ -3,6 +3,8 @@ import logging
 import os
 import re
 import time
+import json
+from datetime import datetime
 import subprocess
 import telebot
 from rich.console import Console
@@ -27,7 +29,119 @@ if not token:
 bot = telebot.TeleBot(token)
 
 pending_transcriptions = {}  # {chat_id: {"text": str, "audio_path": str}}
+pending_finance_entries = {}  # {chat_id: {"type": str, "category": str, "amount": float, "description": str, "due_date": str}}
 user_states = {}  # {chat_id: str}
+
+def format_finance_card_preview(data: dict, doc_type: str = "Voz", original_text: str = "") -> str:
+    """Formata os dados financeiros extraídos em um card visual para confirmação do usuário."""
+    r_type = data.get("type", "despesa").capitalize()
+    icon = "🔴" if r_type.lower() == "despesa" else "🟢"
+    amount = float(data.get("amount", 0.0))
+    category = data.get("category", "Outros")
+    desc = data.get("description", "Sem descrição")
+    due_date = data.get("due_date", datetime.now().strftime("%Y-%m-%d"))
+    
+    try:
+        due_display = datetime.strptime(due_date, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        due_display = due_date
+        
+    lines = [
+        f"💰 *Lançamento Financeiro Identificado ({doc_type}):*\n",
+        f"• *Tipo:* {icon} {r_type}",
+        f"• *Categoria:* {category}",
+        f"• *Valor:* `R$ {amount:.2f}`",
+        f"• *Descrição:* {desc}",
+        f"• *Data/Vencimento:* {due_display}\n"
+    ]
+    if original_text:
+        text_escaped = escape_markdown(original_text[:120])
+        lines.append(f"_\"{text_escaped}\"_\n")
+        
+    lines.append("Deseja confirmar e registrar este lançamento?")
+    return "\n".join(lines)
+
+def parse_financial_intent(text: str) -> dict:
+    """Analisa se o texto descreve uma transação financeira e extrai seus campos estruturados."""
+    keywords = [
+        "gastei", "gasto", "comprei", "compra", "compras", "paguei", "pago", "pagamento",
+        "recebi", "recebimento", "salario", "salário", "pix", "fatura", "boleto", "cartão",
+        "cartao", "reais", "r$", "custou", "despesa", "receita"
+    ]
+    text_lower = text.lower()
+    has_keywords = any(w in text_lower for w in keywords)
+    has_number = bool(re.search(r'\d+', text))
+    if not (has_keywords and has_number):
+        return None
+        
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+    try:
+        from meu_agente_cli import llm
+        model = db.get_setting("active_model", "google/gemma-4-31b-qat")
+        prompt = (
+            "Você é um classificador e extrator financeiro rigoroso.\n"
+            "Analise a seguinte fala/transcrição:\n"
+            f"\"{text}\"\n\n"
+            "Se o texto descrever uma transação financeira (despesa ou receita realizada ou futura), responda ESTRITAMENTE com o seguinte JSON:\n"
+            "{\n"
+            '  "is_financial": true,\n'
+            '  "type": "despesa" ou "receita",\n'
+            '  "category": "Alimentação | Supermercado | Transporte | Farmácia | Saúde | Moradia | Lazer | Educação | Salário | Outros",\n'
+            '  "amount": 0.00,\n'
+            '  "description": "descrição curta do gasto/receita",\n'
+            f'  "due_date": "{today_iso}" // Data informada ou hoje\n'
+            "}\n\n"
+            "Se NÃO for uma transação financeira (ex: ata de reunião, dúvida técnica, conversa cotidiana), responda:\n"
+            '{"is_financial": false}\n\n'
+            "Responda SOMENTE o bloco JSON, sem markdown ou explicações."
+        )
+        messages = [{"role": "user", "content": prompt}]
+        res = llm.chat_completion(model, messages, stream=False)
+        match = re.search(r'\{.*\}', res, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            if data.get("is_financial") and float(data.get("amount", 0)) > 0:
+                r_type = str(data.get("type", "despesa")).strip().lower()
+                data["type"] = "receita" if "receita" in r_type else "despesa"
+                data["amount"] = float(data.get("amount", 0))
+                if not data.get("due_date"):
+                    data["due_date"] = today_iso
+                return data
+    except Exception as e:
+        print(f"[Warning] Falha ao extrair intenção financeira via LLM: {e}")
+        
+    # Heurística fallback simples caso a LLM não responda ou retorne formato inválido
+    try:
+        val_match = re.search(r'(?:r\$|\$)?\s*(\d+(?:[.,]\d{1,2})?)\s*(?:reais)?', text_lower)
+        if val_match:
+            raw_val = val_match.group(1).replace(",", ".")
+            amount = float(raw_val)
+            if amount > 0:
+                r_type = "receita" if any(w in text_lower for w in ["recebi", "receita", "salario", "salário", "ganhei"]) else "despesa"
+                category = "Outros"
+                if any(w in text_lower for w in ["almoço", "almoco", "jantar", "lanche", "restaurante", "pizza", "comida", "padaria"]):
+                    category = "Alimentação"
+                elif any(w in text_lower for w in ["mercado", "supermercado", "compras"]):
+                    category = "Supermercado"
+                elif any(w in text_lower for w in ["uber", "taxi", "gasolina", "combustivel", "combustível", "onibus", "ônibus"]):
+                    category = "Transporte"
+                elif any(w in text_lower for w in ["remedio", "remédio", "farmacia", "farmácia", "medico", "médico"]):
+                    category = "Farmácia"
+                elif any(w in text_lower for w in ["aluguel", "condominio", "condomínio", "luz", "energia", "agua", "água", "internet"]):
+                    category = "Moradia"
+                    
+                return {
+                    "is_financial": True,
+                    "type": r_type,
+                    "category": category,
+                    "amount": amount,
+                    "description": text[:80],
+                    "due_date": today_iso
+                }
+    except Exception:
+        pass
+        
+    return None
 
 TELEGRAM_INSTRUCTION = (
     "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Se for responder diretamente "
@@ -80,7 +194,11 @@ def format_help_telegram() -> str:
         "• `/transcrever` - Lista arquivos de áudio em `uploads/` para transcrição.\n"
         "  └─ _Transcrever:_ `/transcrever <nome_do_arquivo>` para iniciar.\n"
         "• `/backup` - Cria uma cópia de segurança criptografada do banco.\n"
-        "• `/restore` - Restaura um backup criptografado.\n"
+        "• `/restore` - Restaura um backup criptografado.\n\n"
+        "💡 *Recursos Inteligentes do Bot:*\n"
+        "• 🎙️ *Áudios de Voz:* Fale despesas ou receitas (ex: _'gastei 50 reais no almoço'_) para registro automático.\n"
+        "• 📸 *Fotos de Comprovantes:* Envie fotos de comprovantes PIX, cupons fiscais ou notas para leitura e registro.\n"
+        "• 🔔 *Alerta Diário:* Notificação automática de contas a vencer todos os dias às 11:00 AM.\n"
     )
 
 def format_notes_telegram() -> str:
@@ -875,14 +993,30 @@ def handle_audio_upload(message):
             "audio_path": wav_filepath
         }
         
-        # Monta teclado inline com opções
+        # 1. Verifica se há intenção de lançamento financeiro na transcrição de áudio
+        fin_data = parse_financial_intent(transcription)
+        if fin_data:
+            pending_finance_entries[message.chat.id] = fin_data
+            markup = InlineKeyboardMarkup()
+            btn_confirm = InlineKeyboardButton("✅ Confirmar Lançamento", callback_data="finance_confirm:confirm")
+            btn_meeting = InlineKeyboardButton("📝 Tratar como Reunião", callback_data="audio_action:meeting_menu")
+            btn_cancel = InlineKeyboardButton("❌ Cancelar", callback_data="finance_confirm:cancel")
+            markup.row(btn_confirm)
+            markup.row(btn_meeting, btn_cancel)
+            
+            card_text = format_finance_card_preview(fin_data, doc_type="Voz", original_text=transcription)
+            bot.reply_to(message, card_text, reply_markup=markup, parse_mode="Markdown")
+            return
+
+        # 2. Se não for financeiro, monta teclado inline padrão com opção adicional de lançamento
         markup = InlineKeyboardMarkup()
         btn_simple = InlineKeyboardButton("📝 Resumo Simples", callback_data="audio_action:simple")
         btn_detailed = InlineKeyboardButton("📌 Pontos & Plano de Ação", callback_data="audio_action:detailed")
+        btn_finance = InlineKeyboardButton("💰 Lançar no Financeiro", callback_data="audio_action:finance")
         btn_custom = InlineKeyboardButton("✍️ Outra Instrução...", callback_data="audio_action:custom")
         
         markup.row(btn_simple, btn_detailed)
-        markup.row(btn_custom)
+        markup.row(btn_finance, btn_custom)
         
         # Envia resposta
         transcription_escaped = escape_markdown(transcription)
@@ -960,6 +1094,106 @@ def handle_audio_action(call):
     elif action == "custom":
         user_states[chat_id] = "waiting_for_custom_instruction"
         bot.send_message(chat_id, "✍️ Digite a instrução personalizada para processar o áudio (ex: 'traduza para inglês' ou 'extraia datas'):")
+
+    elif action == "meeting_menu":
+        markup = InlineKeyboardMarkup()
+        btn_simple = InlineKeyboardButton("📝 Resumo Simples", callback_data="audio_action:simple")
+        btn_detailed = InlineKeyboardButton("📌 Pontos & Plano de Ação", callback_data="audio_action:detailed")
+        btn_custom = InlineKeyboardButton("✍️ Outra Instrução...", callback_data="audio_action:custom")
+        markup.row(btn_simple, btn_detailed)
+        markup.row(btn_custom)
+        
+        transcription_escaped = escape_markdown(transcription)
+        msg_text = (
+            f"🎙️ *Menu de Reunião / Transcrição:*\n\n"
+            f"_\"{transcription_escaped}\"_\n\n"
+            f"Escolha o que deseja fazer com esta transcrição:"
+        )
+        try:
+            bot.edit_message_text(msg_text, chat_id=chat_id, message_id=call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        except Exception:
+            bot.send_message(chat_id, msg_text, reply_markup=markup, parse_mode="Markdown")
+
+    elif action == "finance":
+        bot.send_chat_action(chat_id, 'typing')
+        fin_data = parse_financial_intent(transcription)
+        if fin_data:
+            pending_finance_entries[chat_id] = fin_data
+            markup = InlineKeyboardMarkup()
+            btn_confirm = InlineKeyboardButton("✅ Confirmar Lançamento", callback_data="finance_confirm:confirm")
+            btn_cancel = InlineKeyboardButton("❌ Cancelar", callback_data="finance_confirm:cancel")
+            markup.row(btn_confirm, btn_cancel)
+            card_text = format_finance_card_preview(fin_data, doc_type="Voz", original_text=transcription)
+            bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
+        else:
+            bot.send_message(
+                chat_id,
+                "⚠️ Não foi possível identificar automaticamente valores ou categoria claros neste áudio.\n"
+                "Exemplo ideal de voz: *\"Gastei 45 reais no almoço\"* ou *\"Recebi 300 reais de comissão\"*."
+            )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("finance_confirm:"))
+def handle_finance_confirmation(call):
+    chat_id = call.message.chat.id
+    action = call.data.split(":")[1]
+    
+    if action == "cancel":
+        pending_finance_entries.pop(chat_id, None)
+        bot.answer_callback_query(call.id, "Lançamento cancelado.")
+        try:
+            bot.edit_message_text(
+                "❌ *Lançamento financeiro cancelado.*",
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return
+        
+    if action == "confirm":
+        data = pending_finance_entries.pop(chat_id, None)
+        if not data:
+            bot.answer_callback_query(call.id, "Nenhum lançamento pendente encontrado.")
+            bot.send_message(chat_id, "⚠️ O lançamento pendente expirou ou já foi processado.")
+            return
+            
+        r_type = data.get("type", "despesa")
+        category = data.get("category", "Outros")
+        amount = float(data.get("amount", 0.0))
+        description = data.get("description", "")
+        due_date = data.get("due_date")
+        
+        success = db.add_financial_record(r_type, category, amount, description, due_date)
+        bot.answer_callback_query(call.id, "Lançamento registrado com sucesso!")
+        if success:
+            due_display = due_date
+            try:
+                if due_date:
+                    due_display = datetime.strptime(due_date, "%Y-%m-%d").strftime("%d/%m/%Y")
+            except Exception:
+                pass
+                
+            icon = "🔴" if r_type.lower() == "despesa" else "🟢"
+            msg = (
+                f"✅ *Lançamento Financeiro Registrado com Sucesso!*\n\n"
+                f"• *Tipo:* {icon} {r_type.capitalize()}\n"
+                f"• *Categoria:* {category}\n"
+                f"• *Valor:* `R$ {amount:.2f}`\n"
+                f"• *Descrição:* {description or 'N/A'}\n"
+                f"• *Data/Vencimento:* {due_display or 'Hoje'}"
+            )
+            try:
+                bot.edit_message_text(
+                    msg,
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                bot.send_message(chat_id, msg, parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, "❌ Erro ao salvar registro no banco de dados.")
 
 def extract_pdf_text(file_path: str) -> str:
     """Extrai texto de um arquivo PDF usando a biblioteca pypdf."""
@@ -1148,15 +1382,61 @@ def handle_photo_upload(message):
         # Informa o caminho da imagem no prompt para que a LLM o utilize em ferramentas se necessário
         image_info = f"\n\n[IMAGEM SALVA NO SERVIDOR: O arquivo físico desta imagem foi salvo no caminho: {image_path}]"
         
-        # Monta a estrutura da mensagem multimodal
+        # Monta prompt multimodal que analisa comprovantes ou descreve a imagem
+        today_iso = datetime.now().strftime("%Y-%m-%d")
+        custom_caption = f" e considere esta instrução adicional: '{caption}'" if message.caption else ""
+        system_ocr_instruction = (
+            "Você é um assistente com visão computacional especialista em finanças pessoais e auditoria de documentos fiscais.\n"
+            f"Analise a imagem enviada{custom_caption}.\n\n"
+            "PRIMEIRO, determine se a imagem é um documento ou registro financeiro (como comprovante PIX, cupom fiscal, nota fiscal, fatura de cartão, recibo de pagamento ou boleto).\n\n"
+            "Se FOR um documento financeiro, responda EXCLUSIVAMENTE com um bloco JSON no seguinte formato:\n"
+            "{\n"
+            '  "is_financial": true,\n'
+            '  "type": "despesa" ou "receita",\n'
+            '  "category": "Alimentação | Supermercado | Farmácia | Saúde | Transporte | Moradia | Lazer | Educação | Salário | Outros",\n'
+            '  "amount": 0.00,\n'
+            '  "description": "nome do estabelecimento, recebedor ou item principal",\n'
+            f'  "due_date": "YYYY-MM-DD" // Data do comprovante ou hoje ({today_iso}) se não identificada\n'
+            "}\n\n"
+            "Se a imagem NÃO FOR um documento ou comprovante financeiro (ex: foto de pessoas, objetos, paisagens, documentos de texto gerais), responda normalmente em texto descrevendo o que vê na imagem ou respondendo à questão: "
+            f"'{caption}', sem utilizar ferramentas e sem o JSON."
+        )
+        
         multimodal_prompt = [
-            {"type": "text", "text": f"Questão:{caption}\n\nInstruções adicionais: não utilize nenhuma ferramenta, apenas responda a questão."},
+            {"type": "text", "text": system_ocr_instruction},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_str}"}}
         ]
         
-        bot.reply_to(message, "📸 Imagem recebida e codificada. Enviando para análise visual da inteligência artificial...")
+        bot.reply_to(message, "📸 Imagem recebida. Analisando dados e conteúdo visual...")
         
         response = agent.process_agent_turn_silent(multimodal_prompt, use_sys_prompt=False, use_history=False)
+        
+        # Verifica se o modelo detectou documento financeiro e retornou JSON
+        match = re.search(r'\{.*\}', response, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+                if data.get("is_financial") and float(data.get("amount", 0)) > 0:
+                    r_type = str(data.get("type", "despesa")).strip().lower()
+                    data["type"] = "receita" if "receita" in r_type else "despesa"
+                    data["amount"] = float(data.get("amount", 0))
+                    if not data.get("due_date"):
+                        data["due_date"] = today_iso
+                        
+                    pending_finance_entries[message.chat.id] = data
+                    
+                    markup = InlineKeyboardMarkup()
+                    btn_confirm = InlineKeyboardButton("✅ Confirmar Lançamento", callback_data="finance_confirm:confirm")
+                    btn_cancel = InlineKeyboardButton("❌ Cancelar", callback_data="finance_confirm:cancel")
+                    markup.row(btn_confirm, btn_cancel)
+                    
+                    card_text = format_finance_card_preview(data, doc_type="Comprovante/Recibo")
+                    bot.reply_to(message, card_text, reply_markup=markup, parse_mode="Markdown")
+                    return
+            except Exception as parse_ex:
+                print(f"[Warning] Falha no parse JSON de foto financeira: {parse_ex}")
+                
+        # Se não for financeiro, exibe a resposta normal em texto formatado
         reply_formatted(message, response)
         
     except Exception as e:

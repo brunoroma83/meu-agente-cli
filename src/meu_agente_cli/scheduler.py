@@ -95,9 +95,19 @@ async def run_and_log_job(job_id: int, name: str, prompt: str):
     """
     Executa a tarefa do subagente e salva o log na base de dados de anotações
     para auditoria do usuário, além de imprimir uma notificação no console.
+    Se for a tarefa de alerta de contas a vencer, dispara a notificação para o Telegram.
     """
     logging.info("Cron: Iniciando execução do subagente '%s' (ID Cron: %s)", name, job_id)
     try:
+        # Tratamento especializado para alerta financeiro diário
+        if "contas a vencer" in name.lower() or "alerta diário de contas" in name.lower():
+            from meu_agente_cli import notifications
+            alert_result = notifications.send_due_bills_alert()
+            db.add_user_note(f"LOG SUBAGENTE '{name}' (ID Cron: {job_id}):\n{alert_result}")
+            logging.info("Cron: Alerta financeiro enviado com sucesso: %s", alert_result)
+            print(f"\n[CRON] Alerta financeiro '{name}' enviado para o Telegram!\n> ", end="", file=sys.stderr)
+            return
+
         log = await run_subagent_loop(prompt)
         # Salva o log nas notas para que o usuário possa consultar depois
         db.add_user_note(f"LOG SUBAGENTE '{name}' (ID Cron: {job_id}):\n{log}")
@@ -124,6 +134,10 @@ async def scheduler_loop():
 def start_scheduler():
     """Inicia o agendador em uma thread dedicada com seu próprio event loop."""
     logging.info("Cron: Iniciando o agendador de tarefas em segundo plano...")
+    try:
+        db.ensure_daily_finance_cron()
+    except Exception as ex_cron:
+        logging.warning("Falha ao inicializar cron diário financeiro no agendador: %s", ex_cron)
     def run_in_thread():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

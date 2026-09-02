@@ -315,6 +315,13 @@ def init_database() -> bool:
             
         conn.commit()
         conn.close()
+        
+        # Garante o cron job diário de alerta financeiro às 11:00 AM
+        try:
+            ensure_daily_finance_cron()
+        except Exception as _cron_ex:
+            logging.warning("Não foi possível verificar/criar cron job diário financeiro: %s", _cron_ex)
+
         logging.info("Banco de dados inicializado com sucesso!")
         print("[SUCCESS] Banco de dados inicializado com sucesso!")
         return True
@@ -829,6 +836,37 @@ def delete_cron_job(job_id: int) -> bool:
         return True
     except Exception as e:
         print(f"[ERROR] Erro ao desativar cronjob: {e}", file=sys.stderr)
+        return False
+
+def ensure_daily_finance_cron() -> bool:
+    """Garante que o cron job diário de alerta de contas às 11:00 AM exista e esteja ativo."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, cron_expression, active FROM cron_jobs WHERE name = 'Alerta Diário de Contas a Vencer'"
+            )
+            row = cur.fetchone()
+            if row:
+                job_id, cron_expr, active = row
+                if not active or cron_expr != "0 11 * * *":
+                    from croniter import croniter
+                    next_run = croniter("0 11 * * *", datetime.now()).get_next(datetime)
+                    cur.execute(
+                        "UPDATE cron_jobs SET cron_expression = '0 11 * * *', next_run = %s, active = TRUE, status = 'active' WHERE id = %s",
+                        (next_run, job_id)
+                    )
+                    conn.commit()
+                conn.close()
+                return True
+        conn.close()
+        return add_cron_job(
+            name="Alerta Diário de Contas a Vencer",
+            cron_expression="0 11 * * *",
+            task_prompt="Verificar contas e despesas com vencimento hoje e nos próximos 2 dias e enviar alerta para o Telegram."
+        )
+    except Exception as e:
+        print(f"[ERROR] Erro ao garantir cron de alerta financeiro: {e}", file=sys.stderr)
         return False
 
 def _format_sql_value(val: Any) -> str:
