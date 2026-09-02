@@ -758,6 +758,88 @@ def restore_financial_record(record_id: int) -> bool:
         print(f"[ERROR] Erro ao restaurar registro financeiro: {e}", file=sys.stderr)
         return False
 
+def get_financial_categories() -> List[str]:
+    """Retorna todas as categorias distintas com registros ativos."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT category FROM financial_records WHERE active = TRUE ORDER BY category ASC"
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return [r[0] for r in rows if r[0]]
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar categorias financeiras: {e}", file=sys.stderr)
+        return []
+
+def get_expenses_by_category(month_year: Optional[str] = None) -> Dict[str, float]:
+    """Retorna os totais de despesas ativas agrupados por categoria."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            sql = (
+                "SELECT category, SUM(amount) FROM financial_records "
+                "WHERE active = TRUE AND lower(type) = 'despesa' "
+            )
+            params = []
+            if month_year:
+                parts = month_year.split('-')
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    m, y = int(parts[0]), int(parts[1])
+                    sql += "AND EXTRACT(MONTH FROM due_date) = %s AND EXTRACT(YEAR FROM due_date) = %s "
+                    params.extend([m, y])
+            sql += "GROUP BY category ORDER BY SUM(amount) DESC"
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+        conn.close()
+        return {r[0]: float(r[1]) for r in rows}
+    except Exception as e:
+        print(f"[ERROR] Erro ao agrupar despesas por categoria: {e}", file=sys.stderr)
+        return {}
+
+def get_monthly_overview(year: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Retorna o consolidado mensal de receitas, despesas e saldo do ano."""
+    if year is None:
+        year = datetime.now().year
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 
+                    EXTRACT(MONTH FROM due_date)::INTEGER as mes,
+                    SUM(CASE WHEN lower(type) = 'receita' THEN amount ELSE 0 END) as receitas,
+                    SUM(CASE WHEN lower(type) = 'despesa' THEN amount ELSE 0 END) as despesas
+                FROM financial_records
+                WHERE active = TRUE AND EXTRACT(YEAR FROM due_date) = %s
+                GROUP BY EXTRACT(MONTH FROM due_date)
+                ORDER BY mes ASC
+                """,
+                (year,)
+            )
+            rows = cur.fetchall()
+        conn.close()
+        
+        meses_nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+        dados_por_mes = {r[0]: {"receitas": float(r[1]), "despesas": float(r[2])} for r in rows if r[0] is not None}
+        
+        resultado = []
+        for m in range(1, 13):
+            rec = dados_por_mes.get(m, {}).get("receitas", 0.0)
+            desp = dados_por_mes.get(m, {}).get("despesas", 0.0)
+            resultado.append({
+                "mes_num": m,
+                "mes_label": f"{meses_nomes[m-1]}/{year}",
+                "receitas": rec,
+                "despesas": desp,
+                "saldo": rec - desp
+            })
+        return resultado
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar resumo anual: {e}", file=sys.stderr)
+        return []
+
 # 5. Agendamentos de Tarefas (Cron Jobs)
 def add_cron_job(name: str, cron_expression: str, task_prompt: str) -> bool:
     """Adiciona um novo cron job de subagente, calculando o próximo disparo."""

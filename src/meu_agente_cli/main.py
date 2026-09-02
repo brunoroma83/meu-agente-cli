@@ -604,7 +604,7 @@ def handle_slash_command(cmd_input: str) -> bool:
             "- [green]/safe[/green]: Ativa o Modo Seguro (execução apenas de comandos permitidos).\n"
             "- [green]/unsafe[/green]: Desativa o Modo Seguro (requer senha de segurança).\n"
             "- [green]/notes[/green]: Gerencia notas (lista tudo).\n"
-            "- [green]/finance[/green]: Mostra finanças do mês atual. Filtros: [green]/finance next[/green], [green]/finance deleted[/green], [green]/finance restore <ID>[/green], [green]/finance all[/green], [green]/finance mes=MM-YYYY[/green], [green]/finance q=busca[/green], [green]/finance delete <ID>[/green], [green]/finance import[/green], [green]/finance card[/green] (cartão de crédito).\n"
+            "- [green]/finance[/green]: Mostra finanças do mês atual. Filtros: [green]/finance web[/green] (dashboard Gradio), [green]/finance next[/green], [green]/finance deleted[/green], [green]/finance restore <ID>[/green], [green]/finance all[/green], [green]/finance mes=MM-YYYY[/green], [green]/finance q=busca[/green], [green]/finance delete <ID>[/green], [green]/finance import[/green], [green]/finance card[/green] (cartão de crédito).\n"
             "- [green]/cron[/green]: Gerencia cronjobs (lista tudo). Use [green]/cron add <nome> <cron_expr> <prompt>[/green] para agendar.\n"
             "- [green]/backup[/green]: Cria uma cópia de segurança criptografada com senha do banco de dados.\n"
             "- [green]/restore [caminho][/green]: Restaura um backup criptografado (permite escolher de uma lista se o caminho for omitido).\n"
@@ -825,6 +825,19 @@ def handle_slash_command(cmd_input: str) -> bool:
         console.print("[dim]Use o chat normal para perguntar sobre suas notas ou pesquisar por elas.[/dim]")
         
     elif command == "/finance":
+        # Permite abrir/visualizar link do dashboard web Gradio: /finance web ou /finance dashboard
+        if len(parts) > 1 and parts[1].lower() in ["web", "dashboard", "gradio"]:
+            console.print(Panel(
+                "[bold green]🌐 Dashboard Financeiro Gradio[/bold green]\n\n"
+                "Acesse em seu navegador pelo link:\n"
+                "[bold cyan]👉 http://localhost:7860[/bold cyan]\n\n"
+                "[dim]Se o serviço ainda não estiver rodando no Docker, inicialize com:\n"
+                "docker compose up -d dashboard[/dim]",
+                title="Painel Web Gradio",
+                border_style="green"
+            ))
+            return True
+
         # Permite gerenciamento de cartões de crédito: /finance card
         if len(parts) > 1 and parts[1].lower() in ["card", "cartao"]:
             handle_finance_card_command(parts, console)

@@ -223,7 +223,7 @@ def chat_completion(
         })
         
     if not has_system:
-        payload_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+        payload_messages.insert(0, {"role": "system", "content": build_system_prompt()})
         
     if llm_provider == "claude":
         # Anthropic usa formato próprio de mensagens e system prompt
