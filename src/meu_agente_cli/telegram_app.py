@@ -144,6 +144,9 @@ def format_finance_telegram(parts: list) -> str:
     limit = None
     month_year = None
     query = None
+    due_date = None
+    start_due_date = None
+    end_due_date = None
     table_title = ""
     show_deleted = False
     
@@ -163,6 +166,16 @@ def format_finance_telegram(parts: list) -> str:
         elif arg.lower().startswith("mes="):
             month_year = arg.split("=")[1]
             table_title = f"Vencimento em {month_year}"
+        elif arg.lower().startswith("venc="):
+            val = arg.split("=")[1]
+            if ":" in val:
+                parts_d = val.split(":", 1)
+                start_due_date = parts_d[0].strip()
+                end_due_date = parts_d[1].strip()
+                table_title = f"Vencimento entre {start_due_date} e {end_due_date}"
+            else:
+                due_date = val.strip()
+                table_title = f"Vencimento em {due_date}"
         elif arg.lower().startswith("q="):
             query = arg.split("=")[1]
             table_title = f"Busca por '{query}'"
@@ -174,13 +187,22 @@ def format_finance_telegram(parts: list) -> str:
                 "• `/finance all` (tudo)\n"
                 "• `/finance deleted` (excluídos)\n"
                 "• `/finance mes=MM-YYYY` (mês específico)\n"
+                "• `/finance venc=YYYY-MM-DD` (data específica)\n"
+                "• `/finance venc=YYYY-MM-DD:YYYY-MM-DD` (intervalo de datas)\n"
                 "• `/finance q=busca` (pesquisar)"
             )
             
     if show_deleted:
         records = db.get_deleted_financial_records()
     else:
-        records = db.search_financial_records(limit=limit, month_year=month_year, query=query)
+        records = db.search_financial_records(
+            limit=limit, 
+            month_year=month_year, 
+            query=query,
+            due_date=due_date,
+            start_due_date=start_due_date,
+            end_due_date=end_due_date
+        )
         
     if not records:
         return f"🔍 *{table_title}*\n\nNenhuma transação encontrada com os filtros especificados."

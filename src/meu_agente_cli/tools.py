@@ -167,12 +167,37 @@ def get_news(category: str = "geral") -> str:
 # FERRAMENTA: FINANÇAS PESSOAIS (POSTGRESQL)
 # =====================================================================
 
-def finance_tool(action: str, category: str = "", amount: float = 0.0, description: str = "", due_date: Optional[str] = None, record_id: Optional[int] = None, record_ids: Optional[List[int]] = None, items: Optional[List[Dict[str, Any]]] = None) -> str:
+def finance_tool(
+    action: str, 
+    category: str = "", 
+    amount: float = 0.0, 
+    description: str = "", 
+    due_date: Optional[str] = None, 
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    record_id: Optional[int] = None, 
+    record_ids: Optional[List[int]] = None, 
+    items: Optional[List[Dict[str, Any]]] = None,
+    query: Optional[str] = None,
+    limit: Optional[int] = None,
+    **kwargs
+) -> str:
     """
     Interface para o módulo financeiro no banco de dados.
-    Ações: 'add_receita', 'add_despesa', 'add_bulk', 'delete', 'extrato', 'resumo'
+    Ações: 'add_receita', 'add_despesa', 'add_bulk', 'delete', 'extrato', 'resumo', 'search' (ou 'busca'/'buscar')
     """
     act = action.strip().lower()
+    
+    # Extrai argumentos flexíveis de kwargs para compatibilidade
+    start_date = start_date or kwargs.get("start_due_date") or kwargs.get("due_date_start") or kwargs.get("data_inicio") or kwargs.get("data_inicial")
+    end_date = end_date or kwargs.get("end_due_date") or kwargs.get("due_date_end") or kwargs.get("data_fim") or kwargs.get("data_final")
+    due_date = due_date or kwargs.get("data_vencimento") or kwargs.get("vencimento")
+    query = query or kwargs.get("q") or kwargs.get("termo") or kwargs.get("busca")
+    month_year = kwargs.get("month_year") or kwargs.get("mes") or kwargs.get("mes_ano")
+    record_type = kwargs.get("record_type") or kwargs.get("type") or kwargs.get("tipo")
+    if not category and kwargs.get("categoria"):
+        category = kwargs.get("categoria", "")
+
     if act == "add_bulk":
         if not items:
             return "Erro: Parâmetro 'items' contendo a lista de lançamentos é obrigatório para a ação 'add_bulk'."
@@ -198,7 +223,7 @@ def finance_tool(action: str, category: str = "", amount: float = 0.0, descripti
         else:
             return "Erro: Parâmetro 'record_id' ou 'record_ids' é obrigatório para a ação 'delete'."
             
-    elif act == "add_receita" or act == "add_despesa":
+    elif act in ("add_receita", "add_despesa"):
         record_type = "receita" if "receita" in act else "despesa"
         if not category:
             return "Erro: Categoria é obrigatória para registrar transações."
@@ -212,17 +237,70 @@ def finance_tool(action: str, category: str = "", amount: float = 0.0, descripti
         else:
             return "[ERROR] Falha ao salvar registro financeiro no banco de dados."
             
-    elif act == "extrato":
-        records = db.get_financial_records(limit=20)
+    elif act in ("extrato", "search", "busca", "buscar", "buscar_vencimento", "buscar_por_vencimento", "filtro", "filtrar"):
+        is_filtered_search = bool(due_date or start_date or end_date or query or month_year or record_type or category or act != "extrato")
+        search_limit = limit if limit is not None else (None if is_filtered_search else 20)
+        
+        records = db.search_financial_records(
+            limit=search_limit,
+            month_year=month_year,
+            query=query,
+            due_date=due_date,
+            start_due_date=start_date,
+            end_due_date=end_date,
+            record_type=record_type,
+            category=category if category else None
+        )
         if not records:
-            return "Nenhum registro financeiro encontrado."
+            detalhes = []
+            if due_date:
+                detalhes.append(f"com vencimento em {due_date}")
+            elif start_date and end_date:
+                detalhes.append(f"com vencimento entre {start_date} e {end_date}")
+            elif start_date:
+                detalhes.append(f"com vencimento a partir de {start_date}")
+            elif end_date:
+                detalhes.append(f"com vencimento até {end_date}")
+            if month_year:
+                detalhes.append(f"no mês/ano {month_year}")
+            if query:
+                detalhes.append(f"contendo '{query}'")
+            if category:
+                detalhes.append(f"na categoria '{category}'")
+                
+            criterio_str = " (" + ", ".join(detalhes) + ")" if detalhes else ""
+            return f"Nenhum registro financeiro encontrado{criterio_str}."
             
-        output = ["Extrato das últimas 20 transações:"]
+        if due_date:
+            titulo = f"Registros financeiros com vencimento em {due_date}:"
+        elif start_date and end_date:
+            titulo = f"Registros financeiros com vencimento entre {start_date} e {end_date}:"
+        elif start_date:
+            titulo = f"Registros financeiros com vencimento a partir de {start_date}:"
+        elif end_date:
+            titulo = f"Registros financeiros com vencimento até {end_date}:"
+        elif month_year:
+            titulo = f"Registros financeiros com vencimento no mês {month_year}:"
+        elif query:
+            titulo = f"Registros financeiros encontrados para '{query}':"
+        else:
+            titulo = f"Extrato das últimas {len(records)} transações:"
+            
+        output = [titulo]
+        sum_rec = 0.0
+        sum_desp = 0.0
         for r in records:
             rec_id, r_type, cat, val, desc, dt, due_dt = r
+            if str(r_type).lower() == "receita":
+                sum_rec += val
+            else:
+                sum_desp += val
             due_part = f" | Venc: {due_dt.strftime('%d/%m/%Y')}" if due_dt else ""
             desc_part = f" ({desc})" if desc else ""
             output.append(f"[{dt.strftime('%d/%m/%Y')}] #{rec_id} {r_type.upper()} | {cat}: R$ {val:.2f}{due_part}{desc_part}")
+            
+        output.append("---")
+        output.append(f"Total: {len(records)} registro(s) | Receitas: R$ {sum_rec:.2f} | Despesas: R$ {sum_desp:.2f} | Saldo: R$ {sum_rec - sum_desp:.2f}")
         return "\n".join(output)
         
     elif act == "resumo":
@@ -234,7 +312,7 @@ def finance_tool(action: str, category: str = "", amount: float = 0.0, descripti
             f"- Saldo Atual: R$ {summary['saldo']:.2f}"
         )
     else:
-        return "Erro: Ação financeira desconhecida. Use 'add_receita', 'add_despesa', 'add_bulk', 'delete', 'extrato' ou 'resumo'."
+        return "Erro: Ação financeira desconhecida. Use 'add_receita', 'add_despesa', 'add_bulk', 'delete', 'search' (busca por vencimento/intervalo), 'extrato' ou 'resumo'."
 
 # =====================================================================
 # FERRAMENTA: ANOTAÇÕES / MEMÓRIA (POSTGRESQL)

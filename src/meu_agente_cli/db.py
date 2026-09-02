@@ -553,16 +553,44 @@ def get_financial_records(limit: int = 50) -> List[Tuple[int, str, str, float, s
         print(f"[ERROR] Erro ao buscar registros financeiros: {e}", file=sys.stderr)
         return []
 
+def parse_date_str(date_str: Optional[str]) -> Optional[str]:
+    """Normaliza strings de datas (YYYY-MM-DD, DD/MM/YYYY, etc.) para o formato ISO YYYY-MM-DD."""
+    if not date_str:
+        return None
+    date_str = str(date_str).strip()
+    if not date_str:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return date_str
+
 def search_financial_records(
     limit: Optional[int] = None, 
     month_year: Optional[str] = None, 
-    query: Optional[str] = None
+    query: Optional[str] = None,
+    due_date: Optional[str] = None,
+    start_due_date: Optional[str] = None,
+    end_due_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    record_type: Optional[str] = None,
+    category: Optional[str] = None,
+    order_asc: Optional[bool] = None
 ) -> List[Tuple[int, str, str, float, str, datetime, Optional[datetime]]]:
     """
     Busca registros financeiros ativos aplicando filtros opcionais:
     - limit: quantidade máxima de linhas (None para sem limite)
     - month_year: formato 'MM-YYYY', filtra due_date naquele mês/ano
     - query: termo de busca na categoria ou descrição (busca case-insensitive e sotaque-insensitive)
+    - due_date: data de vencimento específica (ex: 'YYYY-MM-DD' ou 'DD/MM/YYYY')
+    - start_due_date / start_date: data inicial do intervalo de vencimento
+    - end_due_date / end_date: data final do intervalo de vencimento
+    - record_type: 'receita' ou 'despesa'
+    - category: filtro por categoria
+    - order_asc: se True ordena por due_date ASC, id ASC; se False por id DESC; se None escolhe inteligentemente
     """
     try:
         conn = get_connection()
@@ -571,6 +599,26 @@ def search_financial_records(
             conditions = ["active = TRUE"]
             params = []
             
+            # Normalização de datas de vencimento
+            start_val = parse_date_str(start_due_date or start_date)
+            end_val = parse_date_str(end_due_date or end_date)
+            exact_due_val = parse_date_str(due_date)
+
+            if exact_due_val:
+                conditions.append("due_date = %s")
+                params.append(exact_due_val)
+            else:
+                if start_val and end_val and start_val == end_val:
+                    conditions.append("due_date = %s")
+                    params.append(start_val)
+                else:
+                    if start_val:
+                        conditions.append("due_date >= %s")
+                        params.append(start_val)
+                    if end_val:
+                        conditions.append("due_date <= %s")
+                        params.append(end_val)
+                    
             if month_year:
                 parts = month_year.split('-')
                 if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
@@ -579,6 +627,19 @@ def search_financial_records(
                     conditions.append("EXTRACT(MONTH FROM due_date) = %s AND EXTRACT(YEAR FROM due_date) = %s")
                     params.extend([month, year])
                     
+            if record_type:
+                conditions.append("lower(type) = %s")
+                params.append(record_type.strip().lower())
+
+            if category:
+                cat_clean = f"%{clean_string(category)}%"
+                translate_cat_sql = (
+                    "translate(lower(category), 'áàâãäéèêëíìîïóòôõöúùûüç', 'aaaaaeeeeiiiiooooouuuuc') ILIKE "
+                    "translate(lower(%s), 'áàâãäéèêëíìîïóòôõöúùûüç', 'aaaaaeeeeiiiiooooouuuuc')"
+                )
+                conditions.append(translate_cat_sql)
+                params.append(cat_clean)
+
             if query:
                 q_clean = f"%{clean_string(query)}%"
                 # Usa TRANSLATE e LOWER para busca insensível a acentos e maiúsculas
@@ -595,7 +656,10 @@ def search_financial_records(
             if conditions:
                 sql += " WHERE " + " AND ".join(conditions)
                 
-            sql += " ORDER BY id DESC"
+            if order_asc is True or (order_asc is None and (exact_due_val or start_val or end_val or month_year)):
+                sql += " ORDER BY due_date ASC NULLS LAST, id ASC"
+            else:
+                sql += " ORDER BY id DESC"
             
             if limit is not None:
                 sql += " LIMIT %s"

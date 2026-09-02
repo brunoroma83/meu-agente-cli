@@ -876,6 +876,9 @@ def handle_slash_command(cmd_input: str) -> bool:
         limit = None
         month_year = None
         query = None
+        due_date = None
+        start_due_date = None
+        end_due_date = None
         table_title = ""
         show_deleted = False
         
@@ -896,17 +899,34 @@ def handle_slash_command(cmd_input: str) -> bool:
             elif arg.lower().startswith("mes="):
                 month_year = arg.split("=")[1]
                 table_title = f"Transações com Vencimento em {month_year}"
+            elif arg.lower().startswith("venc="):
+                val = arg.split("=")[1]
+                if ":" in val:
+                    parts_d = val.split(":", 1)
+                    start_due_date = parts_d[0].strip()
+                    end_due_date = parts_d[1].strip()
+                    table_title = f"Transações com Vencimento entre {start_due_date} e {end_due_date}"
+                else:
+                    due_date = val.strip()
+                    table_title = f"Transações com Vencimento em {due_date}"
             elif arg.lower().startswith("q="):
                 query = arg.split("=")[1]
                 table_title = f"Busca de Transações por '{query}'"
             else:
-                console.print("[red]Filtro inválido. Use /finance, /finance next, /finance deleted, /finance restore <ID>, /finance all, /finance mes=MM-YYYY ou /finance q=busca[/red]")
+                console.print("[red]Filtro inválido. Use /finance, /finance next, /finance deleted, /finance restore <ID>, /finance all, /finance mes=MM-YYYY, /finance venc=YYYY-MM-DD[:YYYY-MM-DD] ou /finance q=busca[/red]")
                 return True
                 
         if show_deleted:
             records = db.get_deleted_financial_records()
         else:
-            records = db.search_financial_records(limit=limit, month_year=month_year, query=query)
+            records = db.search_financial_records(
+                limit=limit, 
+                month_year=month_year, 
+                query=query, 
+                due_date=due_date, 
+                start_due_date=start_due_date, 
+                end_due_date=end_due_date
+            )
         
         # Calcula somatório dinâmico com base apenas nos registros filtrados/exibidos
         sum_receitas = 0.0
