@@ -306,12 +306,54 @@ def init_database() -> bool:
                 )
             """)
             
+            # 10. Tabela de Modelos de Contas Recorrentes
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS recurring_bills (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    category VARCHAR(50) NOT NULL,
+                    default_amount NUMERIC(12, 2) NOT NULL,
+                    due_day INT NOT NULL,
+                    active BOOLEAN DEFAULT TRUE
+                )
+            """)
+            
             # Migrations para bases de dados existentes
             cur.execute("ALTER TABLE user_notes ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
             cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS due_date DATE")
             cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
+            cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS nature VARCHAR(20) DEFAULT 'daily'")
+            cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS card_name VARCHAR(100)")
+            cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE")
+            cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS payment_date DATE")
             cur.execute("ALTER TABLE cron_jobs ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
             cur.execute("ALTER TABLE audio_transcriptions ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
+            
+            # Backfill inteligente de dados existentes (se ainda não categorizados)
+            cur.execute("""
+                UPDATE financial_records 
+                SET nature = 'card_purchase',
+                    card_name = CASE 
+                        WHEN category ILIKE '%Cartão de Crédito Itaú%' OR description ILIKE '%[Cartão de Crédito Itaú%' THEN 'Cartão Itaú'
+                        WHEN category ILIKE '%Cartão de Crédito BB%' OR description ILIKE '%[Cartão de Crédito BB%' THEN 'Cartão BB'
+                        WHEN category ILIKE '%Cartão de Crédito Porto%' OR description ILIKE '%[Cartão de Crédito Porto%' THEN 'Cartão Porto'
+                        ELSE 'Cartão de Crédito'
+                    END
+                WHERE (category ILIKE '%Cartão de Crédito%' OR description ILIKE '%[Cartão%')
+                  AND (card_name IS NULL OR nature = 'daily');
+
+                UPDATE financial_records
+                SET nature = 'card_purchase',
+                    card_name = substring(description from '^\\[([A-Za-z0-9\\-_]+)\\s+\\d+/\\d+\\]')
+                WHERE description ~ '^\\[([A-Za-z0-9\\-_]+)\\s+\\d+/\\d+\\]'
+                  AND (card_name IS NULL OR nature = 'daily');
+
+                UPDATE financial_records
+                SET nature = 'monthly'
+                WHERE category IN ('Casa', 'Seguro', 'Condominio', 'Condomínio', 'Energia', 'Internet', 'Telefonia', 'Curso', 'Impostos')
+                  AND nature = 'daily'
+                  AND card_name IS NULL;
+            """)
             
         conn.commit()
         conn.close()
@@ -612,18 +654,18 @@ def search_financial_records(
             exact_due_val = parse_date_str(due_date)
 
             if exact_due_val:
-                conditions.append("due_date = %s")
+                conditions.append("COALESCE(due_date, date) = %s")
                 params.append(exact_due_val)
             else:
                 if start_val and end_val and start_val == end_val:
-                    conditions.append("due_date = %s")
+                    conditions.append("COALESCE(due_date, date) = %s")
                     params.append(start_val)
                 else:
                     if start_val:
-                        conditions.append("due_date >= %s")
+                        conditions.append("COALESCE(due_date, date) >= %s")
                         params.append(start_val)
                     if end_val:
-                        conditions.append("due_date <= %s")
+                        conditions.append("COALESCE(due_date, date) <= %s")
                         params.append(end_val)
                     
             if month_year:
@@ -631,7 +673,7 @@ def search_financial_records(
                 if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
                     month = int(parts[0])
                     year = int(parts[1])
-                    conditions.append("EXTRACT(MONTH FROM due_date) = %s AND EXTRACT(YEAR FROM due_date) = %s")
+                    conditions.append("EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s")
                     params.extend([month, year])
                     
             if record_type:
@@ -664,7 +706,7 @@ def search_financial_records(
                 sql += " WHERE " + " AND ".join(conditions)
                 
             if order_asc is True or (order_asc is None and (exact_due_val or start_val or end_val or month_year)):
-                sql += " ORDER BY due_date ASC NULLS LAST, id ASC"
+                sql += " ORDER BY COALESCE(due_date, date) ASC NULLS LAST, id ASC"
             else:
                 sql += " ORDER BY id DESC"
             
@@ -787,7 +829,7 @@ def get_expenses_by_category(month_year: Optional[str] = None) -> Dict[str, floa
                 parts = month_year.split('-')
                 if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
                     m, y = int(parts[0]), int(parts[1])
-                    sql += "AND EXTRACT(MONTH FROM due_date) = %s AND EXTRACT(YEAR FROM due_date) = %s "
+                    sql += "AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s "
                     params.extend([m, y])
             sql += "GROUP BY category ORDER BY SUM(amount) DESC"
             cur.execute(sql, tuple(params))
@@ -808,12 +850,12 @@ def get_monthly_overview(year: Optional[int] = None) -> List[Dict[str, Any]]:
             cur.execute(
                 """
                 SELECT 
-                    EXTRACT(MONTH FROM due_date)::INTEGER as mes,
+                    EXTRACT(MONTH FROM COALESCE(due_date, date))::INTEGER as mes,
                     SUM(CASE WHEN lower(type) = 'receita' THEN amount ELSE 0 END) as receitas,
                     SUM(CASE WHEN lower(type) = 'despesa' THEN amount ELSE 0 END) as despesas
                 FROM financial_records
-                WHERE active = TRUE AND EXTRACT(YEAR FROM due_date) = %s
-                GROUP BY EXTRACT(MONTH FROM due_date)
+                WHERE active = TRUE AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
+                GROUP BY EXTRACT(MONTH FROM COALESCE(due_date, date))
                 ORDER BY mes ASC
                 """,
                 (year,)
@@ -839,6 +881,468 @@ def get_monthly_overview(year: Optional[int] = None) -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"[ERROR] Erro ao buscar resumo anual: {e}", file=sys.stderr)
         return []
+
+# 4.1 Contas Recorrentes, Cartões de Crédito e Orçamento Diário
+def add_recurring_bill(name: str, category: str, default_amount: float, due_day: int) -> bool:
+    """Adiciona um modelo de conta recorrente mensal."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO recurring_bills (name, category, default_amount, due_day, active) VALUES (%s, %s, %s, %s, TRUE)",
+                (clean_string(name), clean_string(category), float(default_amount), int(due_day))
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao cadastrar conta recorrente: {e}", file=sys.stderr)
+        return False
+
+def get_recurring_bills() -> List[Dict[str, Any]]:
+    """Retorna os modelos cadastrados de contas recorrentes."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, category, default_amount, due_day, active FROM recurring_bills WHERE active = TRUE ORDER BY due_day ASC")
+            rows = cur.fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "category": r[2],
+                "default_amount": float(r[3]),
+                "due_day": r[4],
+                "active": r[5]
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar contas recorrentes: {e}", file=sys.stderr)
+        return []
+
+def delete_recurring_bill(bill_id: int) -> bool:
+    """Inativa um modelo de conta recorrente."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE recurring_bills SET active = FALSE WHERE id = %s", (bill_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao inativar conta recorrente: {e}", file=sys.stderr)
+        return False
+
+def get_distinct_cards() -> List[str]:
+    """Retorna a lista unificada de todos os cartões cadastrados e usados."""
+    cards = set()
+    # Dos settings configurados
+    cfg = get_credit_cards().get("cartoes", {})
+    for c in cfg.keys():
+        cards.add(c)
+    # Dos registros do banco
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT card_name FROM financial_records WHERE card_name IS NOT NULL AND card_name != '' AND active = TRUE")
+            for row in cur.fetchall():
+                if row[0]:
+                    cards.add(row[0])
+        conn.close()
+    except Exception:
+        pass
+    return sorted(list(cards)) if cards else ["Cartão de Crédito"]
+
+def get_monthly_bills(month_year: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Retorna a lista unificada de contas mensais (fixas) e faturas consolidadas de cartão para o mês especificado.
+    """
+    now = datetime.now()
+    if month_year and "-" in month_year:
+        parts = month_year.split("-")
+        m, y = int(parts[0]), int(parts[1])
+    else:
+        m, y = now.month, now.year
+        
+    bills = []
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            # 1. Contas mensais avulsas cadastradas
+            cur.execute(
+                """
+                SELECT id, category, amount, description, due_date, date, is_paid, payment_date
+                FROM financial_records
+                WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'monthly'
+                  AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
+                  AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
+                ORDER BY due_date ASC, id ASC
+                """,
+                (m, y)
+            )
+            for r in cur.fetchall():
+                bills.append({
+                    "id": r[0],
+                    "name": r[3] or r[1],
+                    "category": r[1],
+                    "amount": float(r[2]),
+                    "due_date": r[4] or r[5],
+                    "is_paid": bool(r[6]),
+                    "payment_date": r[7],
+                    "is_card_invoice": False,
+                    "card_name": None
+                })
+                
+            # 2. Faturas consolidadas de cartões de crédito
+            cur.execute(
+                """
+                SELECT 
+                    card_name,
+                    SUM(amount) as total_fatura,
+                    MIN(due_date) as data_venc,
+                    BOOL_AND(is_paid) as todos_pagos
+                FROM financial_records
+                WHERE active = TRUE AND nature = 'card_purchase' AND card_name IS NOT NULL
+                  AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
+                  AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
+                GROUP BY card_name
+                ORDER BY card_name ASC
+                """,
+                (m, y)
+            )
+            for r in cur.fetchall():
+                c_name = r[0]
+                tot = float(r[1]) if r[1] is not None else 0.0
+                venc = r[2]
+                all_paid = bool(r[3]) if r[3] is not None else False
+                bills.append({
+                    "id": f"card_{c_name}",
+                    "name": f"Fatura {c_name}",
+                    "category": "Cartão de Crédito",
+                    "amount": tot,
+                    "due_date": venc,
+                    "is_paid": all_paid,
+                    "payment_date": None,
+                    "is_card_invoice": True,
+                    "card_name": c_name
+                })
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar contas mensais consolidadas: {e}", file=sys.stderr)
+        
+    return bills
+
+def toggle_bill_paid(record_id: Any, is_paid: bool, month_year: Optional[str] = None) -> bool:
+    """Marca uma conta mensal ou fatura de cartão como paga ou pendente."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            rec_str = str(record_id).strip()
+            if rec_str.startswith("card_"):
+                # Fatura de cartão de crédito: atualiza todos os itens de compra daquele cartão no mês
+                card_name = rec_str.replace("card_", "")
+                now = datetime.now()
+                if month_year and "-" in month_year:
+                    parts = month_year.split("-")
+                    m, y = int(parts[0]), int(parts[1])
+                else:
+                    m, y = now.month, now.year
+                    
+                cur.execute(
+                    """
+                    UPDATE financial_records
+                    SET is_paid = %s,
+                        payment_date = CASE WHEN %s THEN CURRENT_DATE ELSE NULL END
+                    WHERE active = TRUE AND nature = 'card_purchase' AND card_name = %s
+                      AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
+                      AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
+                    """,
+                    (is_paid, is_paid, card_name, m, y)
+                )
+            else:
+                rid = int(rec_str)
+                cur.execute(
+                    """
+                    UPDATE financial_records
+                    SET is_paid = %s,
+                        payment_date = CASE WHEN %s THEN CURRENT_DATE ELSE NULL END
+                    WHERE id = %s
+                    """,
+                    (is_paid, is_paid, rid)
+                )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao alternar status de pagamento: {e}", file=sys.stderr)
+def add_card_purchase(
+    card_name: str,
+    category: str,
+    total_amount: float,
+    installments: int,
+    description: str,
+    buy_date_str: Optional[str] = None
+) -> bool:
+    """Registra uma compra à vista ou parcelada no cartão de crédito, calculando parcelas e faturas futuras."""
+    cards_config = get_credit_cards().get("cartoes", {})
+    card_info = None
+    matched_name = card_name.strip()
+    for name, info in cards_config.items():
+        if name.lower() == card_name.strip().lower():
+            card_info = info
+            matched_name = name
+            break
+            
+    closing_day = card_info.get("closing_day", 1) if card_info else 1
+    due_day = card_info.get("due_day", 10) if card_info else 10
+    
+    buy_date = datetime.now()
+    if buy_date_str and buy_date_str.strip():
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+            try:
+                buy_date = datetime.strptime(buy_date_str.strip(), fmt)
+                break
+            except ValueError:
+                pass
+                
+    if buy_date.day >= closing_day:
+        if buy_date.month == 12:
+            closing_month, closing_year = 1, buy_date.year + 1
+        else:
+            closing_month, closing_year = buy_date.month + 1, buy_date.year
+    else:
+        closing_month, closing_year = buy_date.month, buy_date.year
+        
+    if due_day <= closing_day:
+        if closing_month == 12:
+            first_due_month, first_due_year = 1, closing_year + 1
+        else:
+            first_due_month, first_due_year = closing_month + 1, closing_year
+    else:
+        first_due_month, first_due_year = closing_month, closing_year
+        
+    inst_count = max(1, int(installments))
+    base_inst_val = round(total_amount / inst_count, 2)
+    diff = round(total_amount - (base_inst_val * inst_count), 2)
+    
+    records = []
+    import calendar
+    for i in range(1, inst_count + 1):
+        inst_amount = round(base_inst_val + diff, 2) if i == 1 else base_inst_val
+        due_month = first_due_month + (i - 1)
+        due_year = first_due_year
+        while due_month > 12:
+            due_month -= 12
+            due_year += 1
+            
+        max_days = calendar.monthrange(due_year, due_month)[1]
+        adjusted_due_day = min(due_day, max_days)
+        due_date = datetime(due_year, due_month, adjusted_due_day).date()
+        inst_desc = f"[{matched_name} {i}/{inst_count}] {description.strip()}"
+        
+        records.append((
+            "despesa",
+            clean_string(category),
+            inst_amount,
+            inst_desc,
+            buy_date.date(),
+            due_date,
+            "card_purchase",
+            matched_name
+        ))
+        
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO financial_records (type, category, amount, description, date, due_date, nature, card_name, is_paid, active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                """,
+                records
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao registrar compra no cartão: {e}", file=sys.stderr)
+        return False
+
+def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retorna os lançamentos e parcelas individuais de compras no cartão de crédito."""
+    now = datetime.now()
+    if month_year and "-" in month_year:
+        parts = month_year.split("-")
+        m, y = int(parts[0]), int(parts[1])
+    else:
+        m, y = now.month, now.year
+        
+    items = []
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            sql = """
+                SELECT id, card_name, category, amount, description, due_date, date, is_paid
+                FROM financial_records
+                WHERE active = TRUE AND nature = 'card_purchase'
+                  AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
+                  AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
+            """
+            params = [m, y]
+            if card_name and card_name not in ["Todos", "Todas", "", None]:
+                sql += " AND UPPER(card_name) = %s"
+                params.append(card_name.strip().upper())
+                
+            sql += " ORDER BY due_date ASC, id ASC"
+            cur.execute(sql, tuple(params))
+            for r in cur.fetchall():
+                items.append({
+                    "id": r[0],
+                    "card_name": r[1],
+                    "category": r[2],
+                    "amount": float(r[3]),
+                    "description": r[4],
+                    "due_date": r[5] or r[6],
+                    "buy_date": r[6],
+                    "is_paid": bool(r[7])
+                })
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar compras de cartão: {e}", file=sys.stderr)
+    return items
+
+def get_daily_expenses(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None) -> List[Tuple]:
+    """Retorna exclusivamente as despesas rotineiras diárias (nature = 'daily')."""
+    now = datetime.now()
+    if month_year and "-" in month_year:
+        parts = month_year.split("-")
+        m, y = int(parts[0]), int(parts[1])
+    else:
+        m, y = now.month, now.year
+        
+    rows = []
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            sql = """
+                SELECT id, type, category, amount, description, date, due_date
+                FROM financial_records
+                WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'daily'
+                  AND EXTRACT(MONTH FROM COALESCE(date, due_date)) = %s
+                  AND EXTRACT(YEAR FROM COALESCE(date, due_date)) = %s
+            """
+            params = [m, y]
+            if category and category not in ["Todas", "Todos", "", None]:
+                sql += " AND lower(category) = %s"
+                params.append(category.strip().lower())
+            if query and query.strip():
+                sql += " AND (description ILIKE %s OR category ILIKE %s)"
+                termo = f"%{query.strip()}%"
+                params.extend([termo, termo])
+                
+            sql += " ORDER BY COALESCE(date, due_date) DESC, id DESC"
+            cur.execute(sql, tuple(params))
+            raw = cur.fetchall()
+            rows = [(r[0], r[1], r[2], float(r[3]), r[4], r[5], r[6]) for r in raw]
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar despesas diárias: {e}", file=sys.stderr)
+    return rows
+
+def get_daily_budget_summary(month_year: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Calcula o balanço orçamentário e a disponibilidade de gastos por dia (Teto Diário).
+    """
+    import calendar
+    now = datetime.now()
+    if month_year and "-" in month_year:
+        parts = month_year.split("-")
+        m, y = int(parts[0]), int(parts[1])
+    else:
+        m, y = now.month, now.year
+        
+    res = {
+        "receitas_mes": 0.0,
+        "custos_fixos_mes": 0.0,
+        "saldo_livre_mes": 0.0,
+        "gastos_diarios_mes": 0.0,
+        "saldo_livre_restante": 0.0,
+        "gasto_hoje": 0.0,
+        "dias_totais_mes": calendar.monthrange(y, m)[1],
+        "dias_restantes": 1,
+        "teto_diario": 0.0,
+        "status_hoje": "ok"
+    }
+    
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            # 1. Total de Receitas do Mês
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM financial_records
+                WHERE active = TRUE AND lower(type) = 'receita'
+                  AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
+                  AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
+                """,
+                (m, y)
+            )
+            res["receitas_mes"] = float(cur.fetchone()[0])
+            
+            # 2. Total de Gastos Diários no Mês
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM financial_records
+                WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'daily'
+                  AND EXTRACT(MONTH FROM COALESCE(date, due_date)) = %s
+                  AND EXTRACT(YEAR FROM COALESCE(date, due_date)) = %s
+                """,
+                (m, y)
+            )
+            res["gastos_diarios_mes"] = float(cur.fetchone()[0])
+            
+            # 3. Gasto Diário Realizado Hoje
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM financial_records
+                WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'daily'
+                  AND date = CURRENT_DATE
+                """
+            )
+            res["gasto_hoje"] = float(cur.fetchone()[0])
+            
+        conn.close()
+        
+        # 4. Total de Contas Mensais Fixas e Faturas
+        monthly_bills = get_monthly_bills(f"{m:02d}-{y}")
+        res["custos_fixos_mes"] = sum(b["amount"] for b in monthly_bills)
+        
+        # 5. Cálculos Orçamentários
+        res["saldo_livre_mes"] = max(0.0, res["receitas_mes"] - res["custos_fixos_mes"])
+        res["saldo_livre_restante"] = res["saldo_livre_mes"] - res["gastos_diarios_mes"]
+        
+        # Dias restantes no mês
+        dias_no_mes = res["dias_totais_mes"]
+        if y == now.year and m == now.month:
+            dias_restantes = max(1, dias_no_mes - now.day + 1)
+        elif y < now.year or (y == now.year and m < now.month):
+            dias_restantes = 1
+        else:
+            dias_restantes = dias_no_mes
+            
+        res["dias_restantes"] = dias_restantes
+        res["teto_diario"] = max(0.0, res["saldo_livre_restante"] / dias_restantes) if res["saldo_livre_restante"] > 0 else 0.0
+        res["status_hoje"] = "ok" if res["gasto_hoje"] <= (res["teto_diario"] if res["teto_diario"] > 0 else 999999) else "warning"
+        
+    except Exception as e:
+        print(f"[ERROR] Erro ao calcular resumo orçamentário diário: {e}", file=sys.stderr)
+        
+    return res
 
 # 5. Agendamentos de Tarefas (Cron Jobs)
 def add_cron_job(name: str, cron_expression: str, task_prompt: str) -> bool:

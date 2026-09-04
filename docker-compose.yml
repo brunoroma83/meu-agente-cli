@@ -53,7 +53,7 @@ services:
   dashboard:
     build: .
     container_name: meu-agente-dashboard
-    command: uv run python3 -m meu_agente_cli.gradio_app
+    command: uv run --no-dev python3 -m meu_agente_cli.gradio_app
     ports:
       - "7860:7860"
     environment:
@@ -64,6 +64,7 @@ services:
       - DB_PASSWORD=postgres_seguro
       - GRADIO_SERVER_NAME=0.0.0.0
       - GRADIO_SERVER_PORT=7860
+      - PYTHONUNBUFFERED=1
     volumes:
       - agent_data:/root/.config/meu-agente-cli
       - .:/app

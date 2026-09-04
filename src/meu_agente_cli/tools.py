@@ -516,3 +516,67 @@ def profile_tool(action: str, category: str = "", content: str = "") -> str:
         
     else:
         return "Erro: Ação desconhecida. Use 'save', 'get', 'delete' ou 'list'."
+
+# =====================================================================
+# FERRAMENTAS E UTILITÁRIOS: EXTRAÇÃO E LEITURA DE PDFS
+# =====================================================================
+
+def extract_pdf_text(file_path: str) -> str:
+    """
+    Extrai o conteúdo de texto de um arquivo PDF local usando PyPDF2.
+    Retorna o texto estruturado por páginas ou mensagem informativa de erro/aviso.
+    """
+    from pathlib import Path
+    from PyPDF2 import PdfReader
+
+    clean_path = str(file_path).strip().strip("'\"")
+    path_obj = Path(clean_path).expanduser().resolve()
+
+    if not path_obj.exists():
+        return f"[Erro: Arquivo PDF não encontrado em '{clean_path}']"
+
+    if not path_obj.is_file():
+        return f"[Erro: O caminho informado não é um arquivo: '{clean_path}']"
+
+    try:
+        with open(path_obj, "rb") as f:
+            reader = PdfReader(f)
+            num_pages = len(reader.pages)
+            if num_pages == 0:
+                return f"[INFO] O arquivo PDF '{path_obj.name}' está vazio (0 páginas)."
+
+            pages_text = []
+            has_any_text = False
+            for i, page in enumerate(reader.pages, start=1):
+                extracted = page.extract_text()
+                if extracted and extracted.strip():
+                    has_any_text = True
+                    pages_text.append(f"--- Página {i}/{num_pages} ---\n{extracted.strip()}")
+                else:
+                    pages_text.append(f"--- Página {i}/{num_pages} ---\n[Sem texto legível nesta página]")
+
+            full_text = "\n\n".join(pages_text)
+
+            if not has_any_text:
+                return (
+                    f"[Aviso: O PDF '{path_obj.name}' ({num_pages} páginas) foi lido, "
+                    f"mas nenhum texto legível foi extraído. O documento pode conter apenas imagens ou páginas digitalizadas]"
+                )
+
+            return full_text
+    except Exception as e:
+        return f"[Erro ao ler PDF '{clean_path}': {str(e)}]"
+
+def pdf_tool(file_path: str) -> str:
+    """
+    Ferramenta do agente para ler e analisar o conteúdo de arquivos PDF locais.
+    """
+    from pathlib import Path
+    result = extract_pdf_text(file_path)
+    if result.startswith("[Erro"):
+        return f"[ERRO] {result}"
+    elif result.startswith("[Aviso") or result.startswith("[INFO]"):
+        return result
+
+    file_name = Path(str(file_path).strip().strip("'\"")).name
+    return f"[SUCCESS] PDF '{file_name}' lido com sucesso!\n\n{result}"

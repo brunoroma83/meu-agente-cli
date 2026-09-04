@@ -951,14 +951,30 @@ def handle_slash_command(cmd_input: str) -> bool:
                 sum_despesas += val
         sum_saldo = sum_receitas - sum_despesas
         
-        # Mostra o resumo geral dos dados filtrados
-        console.print(Panel(
-            f"[bold green]Receitas:[/bold green] R$ {sum_receitas:.2f}  |  "
-            f"[bold red]Despesas:[/bold red] R$ {sum_despesas:.2f}  |  "
-            f"[bold cyan]Saldo do Filtro:[/bold cyan] R$ {sum_saldo:.2f}",
-            title="Resumo Financeiro (Filtrado)",
-            expand=False
-        ))
+        # Se for consulta com mês especificado ou padrão, exibe o painel de orçamento e teto diário
+        if month_year:
+            budget = db.get_daily_budget_summary(month_year)
+            status_style = "bold green" if budget["status_hoje"] == "ok" else "bold red"
+            status_text = "Dentro da meta diária!" if budget["status_hoje"] == "ok" else "Atenção: ultrapassou o teto diário!"
+            console.print(Panel(
+                f"[bold green]Receitas:[/bold green] R$ {budget['receitas_mes']:.2f}  |  "
+                f"[bold red]Custos Fixos & Faturas:[/bold red] R$ {budget['custos_fixos_mes']:.2f}  |  "
+                f"[bold yellow]Gastos Diários:[/bold yellow] R$ {budget['gastos_diarios_mes']:.2f}\n"
+                f"[bold cyan]Saldo Livre Restante:[/bold cyan] R$ {budget['saldo_livre_restante']:.2f}  |  "
+                f"[bold magenta]Teto Diário Recomendado:[/bold magenta] R$ {budget['teto_diario']:.2f}/dia (restam {budget['dias_restantes']} dias)\n"
+                f"[{status_style}]Gasto Hoje: R$ {budget['gasto_hoje']:.2f} ({status_text})[/{status_style}]",
+                title=f"🎯 Orçamento & Teto Diário ({month_year})",
+                expand=False
+            ))
+        else:
+            # Mostra o resumo geral dos dados filtrados
+            console.print(Panel(
+                f"[bold green]Receitas:[/bold green] R$ {sum_receitas:.2f}  |  "
+                f"[bold red]Despesas:[/bold red] R$ {sum_despesas:.2f}  |  "
+                f"[bold cyan]Saldo do Filtro:[/bold cyan] R$ {sum_saldo:.2f}",
+                title="Resumo Financeiro (Filtrado)",
+                expand=False
+            ))
         
         if records:
             table = Table(title=table_title)

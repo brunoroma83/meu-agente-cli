@@ -209,6 +209,10 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
             return tools.calculator_tool(**args)
         elif tool_name == "invest_tool":
             return tools.invest_tool(**args)
+        elif tool_name == "profile_tool":
+            return tools.profile_tool(**args)
+        elif tool_name == "pdf_tool":
+            return tools.pdf_tool(**args)
         else:
             # Tenta carregar a ferramenta dinamicamente do custom_tools.json
             from pathlib import Path

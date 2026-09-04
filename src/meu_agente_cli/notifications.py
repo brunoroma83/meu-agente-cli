@@ -98,6 +98,19 @@ def check_and_build_due_bills_report(target_date: Optional[date] = None) -> str:
     if not today_bills and not upcoming_bills:
         lines.append("🎉 *Tudo em dia!* Nenhuma conta pendente para hoje ou para os próximos dias.")
         
+    # Adiciona resumo do teto diário de gastos
+    try:
+        budget = db.get_daily_budget_summary()
+        teto = budget.get("teto_diario", 0.0)
+        livre_rest = budget.get("saldo_livre_restante", 0.0)
+        dias_rest = budget.get("dias_restantes", 1)
+        if teto > 0 or livre_rest > 0:
+            lines.append("\n🎯 *Disponibilidade para Gastos Diários:*")
+            lines.append(f"• Teto sugerido para hoje: `R$ {teto:.2f}/dia` (restam {dias_rest} dias)")
+            lines.append(f"• Saldo livre disponível no mês: `R$ {livre_rest:.2f}`")
+    except Exception:
+        pass
+        
     return "\n".join(lines)
 
 def send_due_bills_alert() -> str:

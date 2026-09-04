@@ -5,6 +5,7 @@ import re
 import time
 import json
 from datetime import datetime
+from typing import Optional, List, Dict, Any
 import subprocess
 import telebot
 from rich.console import Console
@@ -13,7 +14,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 # Adiciona o diretório raiz ao path para importação
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from meu_agente_cli import config, db, agent
+from meu_agente_cli import config, db, agent, tools
 from meu_agente_cli.main import handle_slash_command, initialize_components
 
 # Carrega credenciais do Telegram (não requer banco de dados durante a importação)
@@ -61,6 +62,36 @@ def format_finance_card_preview(data: dict, doc_type: str = "Voz", original_text
     lines.append("Deseja confirmar e registrar este lançamento?")
     return "\n".join(lines)
 
+def sanitize_financial_due_date(raw_due_date: Optional[str]) -> str:
+    """
+    Garante que due_date esteja no formato YYYY-MM-DD e corrige eventuais inversões
+    de dia/mês provocadas por LLMs em textos ou comprovantes brasileiros.
+    """
+    now = datetime.now()
+    today_iso = now.strftime("%Y-%m-%d")
+    if not raw_due_date:
+        return today_iso
+        
+    cleaned = db.parse_date_str(str(raw_due_date).strip())
+    if not cleaned:
+        return today_iso
+        
+    try:
+        dt = datetime.strptime(cleaned, "%Y-%m-%d")
+        # Inversão exata em relação à data de hoje (ex: 2026-02-09 quando hoje é 2026-09-02)
+        if dt.year == now.year and dt.month == now.day and dt.day == now.month:
+            return today_iso
+            
+        # Inversão de dia/mês quando o mês resultante caiu no passado do mesmo ano e o dia <= 12
+        if dt.year == now.year and dt.month < now.month and dt.day <= 12 and dt.month <= 12:
+            inverted_dt = datetime(dt.year, dt.day, dt.month)
+            if inverted_dt.month == now.month:
+                return inverted_dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+        
+    return cleaned
+
 def parse_financial_intent(text: str) -> dict:
     """Analisa se o texto descreve uma transação financeira e extrai seus campos estruturados."""
     keywords = [
@@ -91,6 +122,7 @@ def parse_financial_intent(text: str) -> dict:
             '  "description": "descrição curta do gasto/receita",\n'
             f'  "due_date": "{today_iso}" // Data informada ou hoje\n'
             "}\n\n"
+            "IMPORTANTE: No Brasil as datas são DD/MM/AAAA. Se o usuário disser 'dia 02/09' ou '2 de setembro', o formato ISO YYYY-MM-DD é 2026-09-02.\n\n"
             "Se NÃO for uma transação financeira (ex: ata de reunião, dúvida técnica, conversa cotidiana), responda:\n"
             '{"is_financial": false}\n\n'
             "Responda SOMENTE o bloco JSON, sem markdown ou explicações."
@@ -104,8 +136,7 @@ def parse_financial_intent(text: str) -> dict:
                 r_type = str(data.get("type", "despesa")).strip().lower()
                 data["type"] = "receita" if "receita" in r_type else "despesa"
                 data["amount"] = float(data.get("amount", 0))
-                if not data.get("due_date"):
-                    data["due_date"] = today_iso
+                data["due_date"] = sanitize_financial_due_date(data.get("due_date"))
                 return data
     except Exception as e:
         print(f"[Warning] Falha ao extrair intenção financeira via LLM: {e}")
@@ -1195,19 +1226,8 @@ def handle_finance_confirmation(call):
         else:
             bot.send_message(chat_id, "❌ Erro ao salvar registro no banco de dados.")
 
-def extract_pdf_text(file_path: str) -> str:
-    """Extrai texto de um arquivo PDF usando a biblioteca pypdf."""
-    import pypdf
-    texto = []
-    try:
-        reader = pypdf.PdfReader(file_path)
-        for i, page in enumerate(reader.pages):
-            page_text = page.extract_text()
-            if page_text:
-                texto.append(f"--- Página {i+1} ---\n{page_text}")
-        return "\n".join(texto).strip()
-    except Exception as e:
-        return f"[Erro ao ler PDF: {str(e)}]"
+# Reutiliza o extrator de PDF centralizado em tools.py
+extract_pdf_text = tools.extract_pdf_text
 
 def extract_docx_text(file_path: str) -> str:
     """Extrai texto de um arquivo do Word (.docx) usando python-docx."""
@@ -1328,10 +1348,9 @@ def handle_document_upload(message):
             
         caption = message.caption.strip() if message.caption else "Analise e resuma o conteúdo deste arquivo."
         user_prompt = (
-            f"[Arquivo Anexado: {file_name}]\n"
-            f"--- Início do Conteúdo do Arquivo ---\n"
+            f"--- Início do Conteúdo ---\n"
             f"{text_content}\n"
-            f"--- Fim do Conteúdo do Arquivo ---\n\n"
+            f"--- Fim do Conteúdo ---\n\n"
             f"Instrução do Usuário: {caption}"
             f"{TELEGRAM_INSTRUCTION}"
         )
@@ -1398,6 +1417,9 @@ def handle_photo_upload(message):
             '  "description": "nome do estabelecimento, recebedor ou item principal",\n'
             f'  "due_date": "YYYY-MM-DD" // Data do comprovante ou hoje ({today_iso}) se não identificada\n'
             "}\n\n"
+            "IMPORTANTE SOBRE DATAS NO BRASIL: O padrão nacional é DIA/MÊS/ANO (DD/MM/AAAA). "
+            f"Por exemplo: '02/09/2026' ou '02/09' significa dia 02 de SETEMBRO (e NUNCA dia 09 de fevereiro). "
+            f"Converta com precisão para ISO YYYY-MM-DD mantendo o dia e o mês corretos (ex: 02/09/2026 -> {today_iso}).\n\n"
             "Se a imagem NÃO FOR um documento ou comprovante financeiro (ex: foto de pessoas, objetos, paisagens, documentos de texto gerais), responda normalmente em texto descrevendo o que vê na imagem ou respondendo à questão: "
             f"'{caption}', sem utilizar ferramentas e sem o JSON."
         )
@@ -1420,8 +1442,7 @@ def handle_photo_upload(message):
                     r_type = str(data.get("type", "despesa")).strip().lower()
                     data["type"] = "receita" if "receita" in r_type else "despesa"
                     data["amount"] = float(data.get("amount", 0))
-                    if not data.get("due_date"):
-                        data["due_date"] = today_iso
+                    data["due_date"] = sanitize_financial_due_date(data.get("due_date"))
                         
                     pending_finance_entries[message.chat.id] = data
                     

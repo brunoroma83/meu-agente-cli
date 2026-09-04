@@ -15,11 +15,21 @@ Ele utiliza o gerenciador de dependências `uv` para máxima velocidade e isolam
 * **Resiliência a Modelos Locais**: O interpretador de chamadas de ferramenta é resiliente e consegue isolar e rodar blocos de código JSON mesmo se a resposta do modelo vier acompanhada de textos explicativos ou chit-chat inicial.
 
 ### 2. 💰 Gestão Financeira Pessoal Completa (`/finance`)
+* **Dashboard Web Especializado com Gradio (`http://localhost:7860`)**: Interface web moderna dividida em abas dedicadas:
+  - **📅 Contas Mensais & Faturas**: Visão focada exclusivamente em custos fixos recorrentes (aluguel, condomínio, luz, internet) e faturas consolidadas de cartão, com checklist de liquidação (`🟢 Paga` / `⏳ Pendente`).
+  - **💳 Cartões de Crédito**: Extrato detalhado individual por cartão (*Itaú*, *BB*, *C6*, *Porto*, etc.), exibindo cada compra/parcela e consolidando o valor total a pagar na aba de Contas Mensais.
+  - **☕ Gastos Diários & Teto por Dia**: Extrato limpo apenas com despesas rotineiras (alimentação, transporte, lazer) e painel orçamentário que calcula em tempo real o **Teto Diário Recomendado** ($\text{Saldo Livre} / \text{Dias Restantes}$).
+  - **📊 Extrato Geral & Relatórios**: Visão contábil geral unificada e gráficos de evolução.
+  - **💼 Carteira de Investimentos**: Gestão patrimonial com alocação por classe, instituição bancária e atualização de cotações.
+* **Alertas Diários às 11:00 AM com Teto de Gastos**: Cron job automático que notifica diariamente sobre contas a vencer e informa a disponibilidade de gastos recomendada para o dia.
+* **Lançamentos Ágeis por Voz e Fotos (Telegram)**: Fale despesas ou receitas por áudio (ex: *"Gastei 45 reais no almoço de hoje"*) ou envie fotos de comprovantes PIX, cupons fiscais e faturas para leitura via IA multimodal e confirmação em 1 toque (`[✅ Confirmar Lançamento]`).
+* **Cartões de Crédito e Parcelamento (`/finance card`)**: Cadastre datas de fechamento e vencimento de faturas de cartões e registre compras parceladas com ajuste exato de dízimas e projeção automática para os meses subsequentes.
 * **Lançamentos Individuais e em Lote (Bulk)**: Registre despesas e receitas uma a uma ou insira listas inteiras de uma vez, otimizando o consumo de turnos da IA.
 * **Data de Vencimento (`due_date`)**: Suporte nativo a datas de vencimento em lançamentos para controle de contas futuras.
 * **Painel de Resumo Dinâmico**: O resumo consolidado (Receitas, Despesas e Saldo) calcula e exibe em tempo real os somatórios exatos dos itens que correspondem aos filtros de busca aplicados.
 * **Busca Inteligente Insensível a Acentos**: Pesquisa textual case-insensitive e sotaque-insensitive (ex: buscar `cartao` localiza registros cadastrados como `"Cartão"` utilizando transliteração nativa no SQL).
 * **Exclusão Lógica (Soft Delete)**: O agente adota a política de inativação lógica. Dados removidos são apenas marcados como inativos (`active = false`), garantindo que nenhuma informação financeira seja permanentemente destruída.
+
 
 ### 3. 🗓️ Subagentes & Tarefas em Segundo Plano (`/cron`)
 * Thread de agendamento paralelo utilizando `asyncio` e `croniter`.
@@ -73,7 +83,7 @@ Ele utiliza o gerenciador de dependências `uv` para máxima velocidade e isolam
 ### Opção B: Executando com Docker Compose 🐳
 Este projeto vem com suporte nativo a Docker, permitindo levantar o banco de dados PostgreSQL e o assistente de forma isolada com um único comando.
 
-1. Suba o banco e compile o container do agente:
+1. Suba o banco e compile os containers dos serviços (agente, bot do Telegram e dashboard Gradio):
    ```bash
    docker compose up -d --build
    ```
@@ -82,6 +92,8 @@ Este projeto vem com suporte nativo a Docker, permitindo levantar o banco de dad
    docker compose run agent
    ```
    *(Nota: O parâmetro `host.docker.internal` resolve automaticamente o endereço do Windows Host para conectar no LM Studio).*
+3. Acesse o **Dashboard Financeiro Gradio** diretamente no seu navegador:
+   👉 **[http://localhost:7860](http://localhost:7860)**
 
 ### Resiliência na Inicialização:
 * **PostgreSQL**: Se o PostgreSQL do WSL estiver parado, o script tentará iniciá-lo automaticamente.
@@ -113,6 +125,9 @@ Digite esses comandos diretamente na barra de entrada de texto no terminal:
 * **`/transcrever`**: Lista arquivos de áudio presentes na pasta `uploads/` do servidor.
   - `/transcrever <nome_do_arquivo>`: Inicia a transcrição do áudio local (processando automaticamente em chunks caso o arquivo seja longo/grande) e oferece o menu interativo de resumo.
 * **`/finance`**: Exibe a tabela de transações do **Mês Atual** e o painel de resumo financeiro dinâmico.
+  - `/finance web`: Exibe o link e status do Dashboard Web interativo Gradio (`http://localhost:7860`).
+  - `/finance card`: Gestão e lançamentos de cartões de crédito (`card add`, `card list`, `card buy`).
+  - `/finance import`: Importação de receitas e despesas a partir de `uploads/finance.csv`.
   - `/finance next`: Mostra a projeção e planejamento de contas para o **Mês Seguinte**.
   - `/finance deleted`: Lista todos os lançamentos que foram inativados (Soft Deleted).
   - `/finance restore <ID>`: Restaura um lançamento inativado de volta ao status ativo.
