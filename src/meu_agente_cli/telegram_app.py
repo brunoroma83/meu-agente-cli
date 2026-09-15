@@ -177,8 +177,9 @@ def parse_financial_intent(text: str) -> dict:
 TELEGRAM_INSTRUCTION = (
     "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Se for responder diretamente "
     "ao usuário em texto, formate com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII "
-    "ou caixas unicode complexas, pois serão exibidas em uma tela estreita de celular. Se você precisar "
-    "acionar uma ferramenta, continue respondendo APENAS com o bloco JSON da ferramenta, sem texto adicional de conversa.]"
+    "ou caixas unicode complexas. Se você precisar acionar uma ferramenta (como tts_tool, finance_tool, etc.), "
+    "responda EXCLUSIVAMENTE com o bloco JSON da ferramenta, sem texto adicional de conversa. "
+    "NUNCA simule em texto mensagens que afirmam que um áudio foi gerado sem ter acionado o JSON da tts_tool!]"
 )
 
 
@@ -206,6 +207,7 @@ def format_help_telegram() -> str:
     return (
         "🛡️ *Meu Agente CLI - Comandos Disponíveis:*\n\n"
         "• `/help` - Mostra esta lista de ajuda.\n"
+        "• `/agent` - Gerencia e alterna agentes especialistas (ex: `/agent estudo`, `/agent geral`).\n"
         "• `/login <nome_usuario>` - Inicia uma sessão de login (válida por 24h).\n"
         "• `/logout` - Encerra a sessão ativa.\n"
         "• `/status` - Mostra conexões e estado atual de segurança.\n"
@@ -413,17 +415,34 @@ def format_markdown_for_telegram(text: str) -> str:
         
     return text_temp
 
-def reply_formatted(message, text):
-    """Envia a resposta formatada para o Telegram, caindo para texto puro se o parser falhar."""
+def send_telegram_chunk(chat_id: int, chunk: str, reply_to_message_id: Optional[int] = None):
+    """Envia um bloco de mensagem para o Telegram, tentando markdown primeiro e caindo para texto puro se falhar."""
     try:
-        formatted_text = format_markdown_for_telegram(text)
-        bot.reply_to(message, formatted_text, parse_mode="Markdown")
+        formatted_text = format_markdown_for_telegram(chunk)
+        bot.send_message(chat_id, formatted_text, parse_mode="Markdown", reply_to_message_id=reply_to_message_id)
     except Exception as e:
         logging.warning("Falha ao renderizar Markdown no Telegram: %s", e)
         try:
-            bot.reply_to(message, text)
+            bot.send_message(chat_id, chunk, reply_to_message_id=reply_to_message_id)
         except Exception as e_fallback:
             logging.error("Falha crítica ao enviar mensagem: %s", e_fallback)
+
+def reply_formatted(message, text: str):
+    """
+    Envia a resposta para o Telegram.
+    Divide o texto em blocos de até 3900 caracteres para respeitar o limite de 4096 da API do Telegram.
+    """
+    if not text:
+        return
+    try:
+        from telebot.util import smart_split
+        chunks = smart_split(text, chars_per_string=3900)
+    except Exception:
+        chunks = [text[i:i+3900] for i in range(0, len(text), 3900)]
+
+    for i, chunk in enumerate(chunks):
+        reply_id = message.message_id if i == 0 else None
+        send_telegram_chunk(message.chat.id, chunk, reply_to_message_id=reply_id)
 
 @bot.message_handler(func=lambda msg: True)
 def handle_incoming_message(message):
@@ -480,6 +499,9 @@ def handle_incoming_message(message):
             elif cmd == "/models":
                 handle_models_command(message, parts)
                 return
+            elif cmd == "/agent":
+                handle_agent_command_telegram(message, parts)
+                return
             elif cmd == "/finance":
                 # Verifica se é uma listagem/filtro normal ou uma ação (delete, restore, import, card add/buy)
                 is_list = True
@@ -531,9 +553,112 @@ def handle_incoming_message(message):
             telegram_prompt = f"{text}{TELEGRAM_INSTRUCTION}"
             response = agent.process_agent_turn_silent(telegram_prompt)
             reply_formatted(message, response)
+            
+            # Envia áudio sintetizado se tiver sido gerado nesta rodada
+            check_and_send_generated_audio(message, response)
         except Exception as e:
             logging.exception("Erro no processamento da conversa para a mensagem: %s", text)
             bot.reply_to(message, f"Erro no processamento da conversa: {e}")
+
+def handle_agent_command_telegram(message, parts: list):
+    """Trata o comando /agent com exibição formatada e botões inline para troca rápida."""
+    if len(parts) == 1 or (len(parts) > 1 and parts[1].lower() in ["list", "ls"]):
+        agents = db.list_agents()
+        active_slug = db.get_active_agent_slug()
+        lines = ["🤖 *Central de Agentes Especialistas:*\n"]
+        markup = InlineKeyboardMarkup()
+        
+        for a in agents:
+            is_active = a["slug"] == active_slug
+            status_tag = " `[ATIVO ⭐]`" if is_active else ""
+            lines.append(f"• {a['icon']} *{a['name']}* (`{a['slug']}`){status_tag}\n  _{a['description']}_\n")
+            btn_text = f"{'⭐ ' if is_active else ''}{a['icon']} Ativar {a['name']}"
+            markup.add(InlineKeyboardButton(btn_text, callback_data=f"agent_switch:{a['slug']}"))
+            
+        lines.append("Toque no botão do agente desejado ou digite `/agent use <slug>`.")
+        bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", reply_markup=markup)
+        return
+
+    # /agent use <slug> ou /agent <slug>
+    target_slug = parts[2].lower().strip() if parts[1].lower() in ["use", "switch"] and len(parts) > 2 else parts[1].lower().strip()
+    target_agent = db.get_agent(target_slug)
+    if not target_agent:
+        bot.reply_to(message, f"❌ Agente `{target_slug}` não encontrado. Use `/agent` para listar.")
+        return
+
+    if db.set_active_agent_slug(target_slug):
+        bot.reply_to(
+            message,
+            f"✅ *Agente ativo alterado com sucesso!*\n\n"
+            f"• *Nome:* {target_agent['icon']} *{target_agent['name']}*\n"
+            f"• *Identificador:* `{target_agent['slug']}`\n"
+            f"• *Descrição:* _{target_agent['description']}_\n\n"
+            f"_Suas próximas mensagens serão processadas pelas diretrizes deste agente._",
+            parse_mode="Markdown"
+        )
+    else:
+        bot.reply_to(message, "❌ Erro ao trocar de agente no banco de dados.")
+
+def check_and_send_generated_audio(message, response_text: str):
+    """Detecta áudio gerado recentemente por TTS ou menções a arquivos .mp3 e envia diretamente no Telegram."""
+    try:
+        from meu_agente_cli import tts
+        last_audio = tts.pop_last_generated_audio()
+        if last_audio and os.path.exists(last_audio):
+            try:
+                bot.send_chat_action(message.chat.id, 'upload_audio')
+                with open(last_audio, "rb") as f_audio:
+                    bot.send_audio(
+                        message.chat.id,
+                        f_audio,
+                        caption=f"🎙️ *Áudio narrado:* `{os.path.basename(last_audio)}`",
+                        parse_mode="Markdown"
+                    )
+                return
+            except Exception as ex:
+                logging.error("Erro ao enviar áudio pelo Telegram: %s", ex)
+    except Exception as e_tts:
+        logging.error("Erro ao obter pop_last_generated_audio: %s", e_tts)
+
+    if not response_text:
+        return
+    import re
+    from pathlib import Path
+    matches = re.findall(r'(/[^\s\'"<>]+?\.mp3|[A-Za-z]:\\[^\s\'"<>]+?\.mp3|uploads[^\s\'"<>]+?\.mp3)', response_text)
+    for match in matches:
+        clean_match = match.strip().rstrip(".,;:")
+        p = Path(clean_match)
+        if not p.is_file():
+            # Tenta resolver relativo ao container /app ou raiz do projeto
+            p_alt = Path("/app") / clean_match.lstrip("/")
+            if p_alt.is_file():
+                p = p_alt
+        if p.is_file():
+            try:
+                bot.send_chat_action(message.chat.id, 'upload_audio')
+                with open(p, "rb") as f_audio:
+                    bot.send_audio(
+                        message.chat.id,
+                        f_audio,
+                        caption=f"🎙️ *Áudio sintetizado:* `{p.name}`",
+                        parse_mode="Markdown"
+                    )
+            except Exception as ex:
+                logging.error("Erro ao enviar arquivo MP3 pelo Telegram: %s", ex)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("agent_switch:"))
+def handle_agent_switch_callback(call):
+    slug = call.data.split(":", 1)[1]
+    target_agent = db.get_agent(slug)
+    if target_agent and db.set_active_agent_slug(slug):
+        bot.answer_callback_query(call.id, f"Agente alterado para {target_agent['name']}!")
+        bot.send_message(
+            call.message.chat.id,
+            f"✅ Agente ativo alterado para {target_agent['icon']} *{target_agent['name']}* (`{slug}`)",
+            parse_mode="Markdown"
+        )
+    else:
+        bot.answer_callback_query(call.id, "Erro ao alternar agente.")
 
 def escape_markdown(text: str) -> str:
     """Escapa caracteres especiais do Markdown V1 do Telegram para evitar quebras de parser."""
@@ -571,6 +696,7 @@ def process_custom_audio_instruction(message, instruction):
         db.save_audio_transcription(chat_id, audio_path, transcription, f"Instrução personalizada: {instruction}", response)
         
         reply_formatted(message, response)
+        check_and_send_generated_audio(message, response)
         # Limpa transcrição temporária
         pending_transcriptions.pop(chat_id, None)
     except Exception as e:
@@ -1347,11 +1473,24 @@ def handle_document_upload(message):
             text_content = text_content[:25000] + "\n\n... (conteúdo longo do arquivo truncado para análise) ..."
             
         caption = message.caption.strip() if message.caption else "Analise e resuma o conteúdo deste arquivo."
+        caption_lower = caption.lower()
+        is_audio_request = any(k in caption_lower for k in ["áudio", "audio", "voz", "narrar", "ouvir", "falar", "som"])
+
+        audio_guidance = ""
+        if is_audio_request:
+            audio_guidance = (
+                "\n\n[DIRETIVA OBRIGATÓRIA PARA ÁUDIO: O usuário solicitou transformar ou narrar este documento em áudio. "
+                "Sintetize o conteúdo do documento em um roteiro narrativo fluido, articulado e didático e OBRIGATORIAMENTE acione a ferramenta tts_tool "
+                "respondendo APENAS com o bloco JSON correspondente (ex: {\"tool\": \"tts_tool\", \"args\": {\"text\": \"...\", \"title\": \"...\"}}). "
+                "NÃO responda apenas com texto prometendo que gerou o áudio sem antes acionar a tts_tool!]"
+            )
+
         user_prompt = (
-            f"--- Início do Conteúdo ---\n"
+            f"--- Início do Conteúdo do Arquivo: {file_name} ---\n"
             f"{text_content}\n"
             f"--- Fim do Conteúdo ---\n\n"
             f"Instrução do Usuário: {caption}"
+            f"{audio_guidance}"
             f"{TELEGRAM_INSTRUCTION}"
         )
         
@@ -1359,6 +1498,7 @@ def handle_document_upload(message):
         
         response = agent.process_agent_turn_silent(user_prompt)
         reply_formatted(message, response)
+        check_and_send_generated_audio(message, response)
         
     except Exception as e:
         bot.reply_to(message, f"❌ Ocorreu um erro ao processar o arquivo: {e}")

@@ -1,3 +1,4 @@
+import json
 import httpx
 import yfinance as yf
 import feedparser
@@ -447,14 +448,151 @@ def calculator_tool(expression: Optional[str] = None, expressions: Optional[Dict
     return "Erro: Nenhuma expressão ou lote de expressões fornecido."
 
 def invest_tool(**kwargs):
-    if 'action' in kwargs:
-        if kwargs['action'] == 'get_invest':
-            return invest.get_invest()
-        elif kwargs['action'] == 'set_invest':
-            return invest.set_invest(**kwargs)
-        elif kwargs['action'] == 'update_invest':
-            return invest.update_invest(**kwargs)
-    return f"Erro: Ação inválida para a ferramenta de investimentos.\nParâmetros recebidos: {kwargs}"
+    """
+    Ferramenta para gestão de carteira de investimentos (Renda Fixa e Ações).
+    Suporta registro de movimentações, extratos e consultas consolidadas de patrimônio.
+    """
+    action = kwargs.get("action", "").strip().lower()
+    
+    # -------------------------------------------------------------
+    # 1. AÇÕES (RENDA VARIÁVEL)
+    # -------------------------------------------------------------
+    if action in ("registrar_acao", "add_movimentacao_acao", "add_acao"):
+        cod = kwargs.get("codigo_acao") or kwargs.get("ticker") or ""
+        op = kwargs.get("operacao") or "COMPRA"
+        qtd = kwargs.get("quantidade", 0)
+        preco = kwargs.get("preco_unitario") or kwargs.get("preco", 0.0)
+        taxas = kwargs.get("taxas", 0.0)
+        dt = kwargs.get("data_operacao") or kwargs.get("data")
+        rel_id = kwargs.get("relacao_id")
+        
+        ok, msg = invest.add_movimentacao_acao(
+            codigo_acao=cod,
+            operacao=op,
+            quantidade=qtd,
+            preco_unitario=preco,
+            taxas=taxas,
+            data_operacao=dt,
+            relacao_id=rel_id
+        )
+        return msg if ok else f"Erro ao registrar ação: {msg}"
+        
+    elif action in ("consultar_movimentacoes_acoes", "get_movimentacoes_acoes", "extrato_acoes"):
+        cod = kwargs.get("codigo_acao") or kwargs.get("ticker")
+        op = kwargs.get("operacao")
+        dt_ini = kwargs.get("data_inicio")
+        dt_fim = kwargs.get("data_fim")
+        movs = invest.get_movimentacoes_acoes(codigo_acao=cod, operacao=op, data_inicio=dt_ini, data_fim=dt_fim)
+        # Formata datas para string se necessário
+        for m in movs:
+            if hasattr(m.get("data_operacao"), "isoformat"):
+                m["data_operacao"] = m["data_operacao"].isoformat()
+        return json.dumps(movs, indent=2, ensure_ascii=False)
+        
+    elif action in ("consultar_consolidado_acoes", "get_consolidado_acoes", "carteira_acoes", "consultar_view_acoes"):
+        fetch_quotes = kwargs.get("fetch_quotes", True)
+        if action == "consultar_view_acoes":
+            consolidado = invest.get_view_consolidado_acoes()
+        else:
+            consolidado = invest.get_consolidado_acoes(fetch_market_prices=fetch_quotes)
+        for c in consolidado:
+            if hasattr(c.get("data_ultima_operacao"), "isoformat"):
+                c["data_ultima_operacao"] = c["data_ultima_operacao"].isoformat()
+        return json.dumps(consolidado, indent=2, ensure_ascii=False)
+
+    # -------------------------------------------------------------
+    # 2. RENDA FIXA
+    # -------------------------------------------------------------
+    elif action in ("registrar_renda_fixa", "add_movimentacao_rf", "add_rf"):
+        inv_id = kwargs.get("id_investimento") or kwargs.get("id")
+        if not inv_id:
+            return "Erro: 'id_investimento' é obrigatório para registrar movimentação de renda fixa."
+        tipo_mov = kwargs.get("tipo_movimentacao") or kwargs.get("tipo", "APORTE")
+        valor = kwargs.get("valor", 0.0)
+        dt = kwargs.get("data_movimentacao") or kwargs.get("data")
+        
+        ok, msg = invest.add_movimentacao_renda_fixa(
+            id_investimento=int(inv_id),
+            tipo_movimentacao=tipo_mov,
+            valor=valor,
+            data_movimentacao=dt
+        )
+        return msg if ok else f"Erro ao registrar renda fixa: {msg}"
+        
+    elif action in ("cadastrar_titulo_rf", "novo_titulo_rf"):
+        nome = kwargs.get("nome_titulo") or kwargs.get("nome", "")
+        banco = kwargs.get("nome_banco") or kwargs.get("banco", "Outro")
+        tipo = kwargs.get("tipo_investimento") or kwargs.get("tipo", "CDB")
+        dt = kwargs.get("data_inicio") or kwargs.get("data")
+        v_ini = kwargs.get("valor_inicial") or kwargs.get("valor", 0.0)
+        
+        novo_id = invest.cadastrar_titulo_renda_fixa(
+            nome_titulo=nome,
+            nome_banco=banco,
+            tipo_investimento=tipo,
+            data_inicio=dt,
+            valor_inicial=float(v_ini)
+        )
+        if novo_id:
+            return f"Título de Renda Fixa '{nome}' cadastrado com sucesso com ID #{novo_id}!"
+        return f"Erro ao cadastrar título de renda fixa '{nome}'."
+        
+    elif action in ("consultar_movimentacoes_rf", "get_movimentacoes_rf", "extrato_rf"):
+        inv_id = kwargs.get("id_investimento")
+        tipo = kwargs.get("tipo") or kwargs.get("tipo_movimentacao")
+        dt_ini = kwargs.get("data_inicio")
+        dt_fim = kwargs.get("data_fim")
+        movs = invest.get_movimentacoes_renda_fixa(
+            id_investimento=int(inv_id) if inv_id else None,
+            tipo=tipo,
+            data_inicio=dt_ini,
+            data_fim=dt_fim
+        )
+        for m in movs:
+            if hasattr(m.get("data_movimentacao"), "isoformat"):
+                m["data_movimentacao"] = m["data_movimentacao"].isoformat()
+        return json.dumps(movs, indent=2, ensure_ascii=False)
+        
+    elif action in ("consultar_consolidado_rf", "get_consolidado_rf", "carteira_rf"):
+        consolidado = invest.get_consolidado_renda_fixa(active_only=True)
+        for c in consolidado:
+            for k in ("data_inicio", "data_ultima_atualizacao"):
+                if hasattr(c.get(k), "isoformat"):
+                    c[k] = c[k].isoformat()
+        return json.dumps(consolidado, indent=2, ensure_ascii=False)
+        
+    elif action in ("atualizar_cotacao_rf", "update_valor_rf"):
+        inv_id = kwargs.get("id_investimento") or kwargs.get("id")
+        novo_v = kwargs.get("novo_valor") or kwargs.get("valor_atual")
+        if not inv_id or novo_v is None:
+            return "Erro: 'id_investimento' e 'novo_valor' são obrigatórios."
+        ok, msg = invest.update_valor_atual_renda_fixa(int(inv_id), float(novo_v))
+        return msg if ok else f"Erro: {msg}"
+
+    # -------------------------------------------------------------
+    # 3. CONSOLIDADO GERAL / CARTEIRA GLOBAL
+    # -------------------------------------------------------------
+    elif action in ("consultar_consolidado_geral", "get_consolidado_geral", "resumo_carteira", "patrimonio"):
+        resumo = invest.get_resumo_patrimonial_geral()
+        return json.dumps(resumo, indent=2, ensure_ascii=False)
+        
+    elif action in ("migrar_legados", "migrar_investimentos"):
+        res = invest.migrar_investimentos_legados()
+        return json.dumps(res, indent=2, ensure_ascii=False)
+
+    # -------------------------------------------------------------
+    # 4. COMPATIBILIDADE RETROATIVA (LEGACY)
+    # -------------------------------------------------------------
+    elif action == 'get_invest':
+        return json.dumps(invest.get_resumo_patrimonial_geral(), indent=2, ensure_ascii=False)
+    elif action == 'set_invest':
+        ok = invest.set_invest(**kwargs)
+        return "Investimento cadastrado com sucesso!" if ok else "Erro ao cadastrar investimento."
+    elif action == 'update_invest':
+        ok = invest.update_invest(**kwargs)
+        return "Investimento atualizado com sucesso!" if ok else "Erro ao atualizar investimento."
+
+    return f"Erro: Ação '{action}' inválida para a ferramenta de investimentos.\nAções disponíveis: 'registrar_acao', 'consultar_movimentacoes_acoes', 'consultar_consolidado_acoes', 'registrar_renda_fixa', 'cadastrar_titulo_rf', 'consultar_movimentacoes_rf', 'consultar_consolidado_rf', 'atualizar_cotacao_rf', 'consultar_consolidado_geral'."
 
 # =====================================================================
 # FERRAMENTA: PERFIL DO USUÁRIO (POSTGRESQL)
@@ -521,9 +659,10 @@ def profile_tool(action: str, category: str = "", content: str = "") -> str:
 # FERRAMENTAS E UTILITÁRIOS: EXTRAÇÃO E LEITURA DE PDFS
 # =====================================================================
 
-def extract_pdf_text(file_path: str) -> str:
+def extract_pdf_text(file_path: str, start_page: int = 1, end_page: Optional[int] = None) -> str:
     """
     Extrai o conteúdo de texto de um arquivo PDF local usando PyPDF2.
+    Suporta filtro por intervalo de páginas (start_page até end_page).
     Retorna o texto estruturado por páginas ou mensagem informativa de erro/aviso.
     """
     from pathlib import Path
@@ -545,9 +684,14 @@ def extract_pdf_text(file_path: str) -> str:
             if num_pages == 0:
                 return f"[INFO] O arquivo PDF '{path_obj.name}' está vazio (0 páginas)."
 
+            # Valida e ajusta intervalo de páginas
+            s_page = max(1, min(int(start_page), num_pages))
+            e_page = min(num_pages, int(end_page)) if end_page is not None else num_pages
+
             pages_text = []
             has_any_text = False
-            for i, page in enumerate(reader.pages, start=1):
+            for i in range(s_page, e_page + 1):
+                page = reader.pages[i - 1]
                 extracted = page.extract_text()
                 if extracted and extracted.strip():
                     has_any_text = True
@@ -559,7 +703,7 @@ def extract_pdf_text(file_path: str) -> str:
 
             if not has_any_text:
                 return (
-                    f"[Aviso: O PDF '{path_obj.name}' ({num_pages} páginas) foi lido, "
+                    f"[Aviso: O PDF '{path_obj.name}' (páginas {s_page} a {e_page} de {num_pages}) foi lido, "
                     f"mas nenhum texto legível foi extraído. O documento pode conter apenas imagens ou páginas digitalizadas]"
                 )
 
@@ -567,16 +711,161 @@ def extract_pdf_text(file_path: str) -> str:
     except Exception as e:
         return f"[Erro ao ler PDF '{clean_path}': {str(e)}]"
 
-def pdf_tool(file_path: str) -> str:
+def pdf_tool(file_path: str, start_page: int = 1, end_page: Optional[int] = None) -> str:
     """
     Ferramenta do agente para ler e analisar o conteúdo de arquivos PDF locais.
+    Aceita start_page e end_page opcionais para focar em capítulos ou seções específicas.
     """
     from pathlib import Path
-    result = extract_pdf_text(file_path)
+    result = extract_pdf_text(file_path, start_page=start_page, end_page=end_page)
     if result.startswith("[Erro"):
         return f"[ERRO] {result}"
     elif result.startswith("[Aviso") or result.startswith("[INFO]"):
         return result
 
     file_name = Path(str(file_path).strip().strip("'\"")).name
-    return f"[SUCCESS] PDF '{file_name}' lido com sucesso!\n\n{result}"
+    page_info = f" (páginas {start_page} a {end_page})" if end_page else ""
+    return f"[SUCCESS] PDF '{file_name}'{page_info} lido com sucesso!\n\n{result}"
+
+# =====================================================================
+# FERRAMENTAS E UTILITÁRIOS: TEXT-TO-SPEECH (TTS)
+# =====================================================================
+
+def tts_tool(text: str, voice: str = "francisca", title: str = "audio_resumo") -> str:
+    """
+    Sintetiza texto em áudio MP3 de alta fidelidade usando vozes neurais brasileiras (edge-tts).
+    """
+    try:
+        from meu_agente_cli import tts
+        import os
+        from pathlib import Path
+        output_path = tts.synthesize_speech(text=text, voice=voice, title=title)
+        size_bytes = os.path.getsize(output_path)
+        size_kb = size_bytes / 1024
+        file_name = Path(output_path).name
+        return (
+            f"[SUCCESS] Áudio narrado gerado com sucesso!\n"
+            f"• Arquivo: {file_name}\n"
+            f"• Caminho: {output_path}\n"
+            f"• Tamanho: {size_kb:.1f} KB\n"
+            f"• Voz utilizada: {voice.capitalize()}\n"
+            f"O arquivo de áudio está pronto e disponível para reprodução ou envio direto."
+        )
+    except Exception as e:
+        return f"[ERRO] Falha ao sintetizar áudio via TTS: {str(e)}"
+
+# =====================================================================
+# FERRAMENTAS E UTILITÁRIOS: GESTÃO DE AGENTES (META-AGENTE)
+# =====================================================================
+
+def manage_agents_tool(
+    action: str,
+    slug: Optional[str] = None,
+    name: Optional[str] = None,
+    icon: Optional[str] = None,
+    description: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    instruction: Optional[str] = None
+) -> str:
+    """
+    Ferramenta para o Meta-Agente listar, consultar, criar, atualizar e aprimorar agentes especializados.
+    """
+    from meu_agente_cli import db, llm
+    action_clean = str(action).strip().lower()
+
+    if action_clean == "list":
+        agents = db.list_agents()
+        active = db.get_active_agent_slug()
+        lines = [f"📋 Agentes Cadastrados ({len(agents)} disponíveis):"]
+        for a in agents:
+            status = " [ATIVO ⭐]" if a["slug"] == active else ""
+            lines.append(f"• {a['icon']} **{a['name']}** (`{a['slug']}`){status}: {a['description']}")
+        return "\n".join(lines)
+
+    elif action_clean in ("get_info", "info"):
+        if not slug:
+            return "[ERRO] Parâmetro 'slug' é obrigatório para consultar informações do agente."
+        agent = db.get_agent(slug)
+        if not agent:
+            return f"[ERRO] Agente '{slug}' não encontrado."
+        active = db.get_active_agent_slug()
+        status = " (ATIVO)" if agent["slug"] == active else ""
+        return (
+            f"ℹ️ **Ficha Técnica do Agente: {agent['name']}** (`{agent['slug']}`){status}\n"
+            f"• Ícone: {agent['icon']}\n"
+            f"• Descrição: {agent['description']}\n"
+            f"• Padrão do Sistema: {'Sim' if agent['is_default'] else 'Não'}\n"
+            f"• Prompt de Sistema:\n```markdown\n{agent['system_prompt']}\n```"
+        )
+
+    elif action_clean == "create":
+        if not slug or not name or not system_prompt:
+            return "[ERRO] Para criar um agente, 'slug', 'name' e 'system_prompt' são obrigatórios."
+        success = db.create_or_update_agent(
+            slug=slug,
+            name=name,
+            icon=icon or "🤖",
+            description=description or "",
+            system_prompt=system_prompt,
+            is_default=False
+        )
+        if success:
+            return f"[SUCCESS] Agente '{name}' (`{slug}`) criado com sucesso! Use `/agent use {slug}` para ativá-lo."
+        else:
+            return f"[ERRO] Falha ao cadastrar o agente '{slug}' no banco de dados."
+
+    elif action_clean in ("improve", "refine", "update_prompt"):
+        if not slug:
+            return "[ERRO] Parâmetro 'slug' é obrigatório para aprimorar o agente."
+        agent = db.get_agent(slug)
+        if not agent:
+            return f"[ERRO] Agente '{slug}' não encontrado."
+            
+        current_prompt = agent["system_prompt"]
+        
+        if system_prompt:
+            new_prompt = system_prompt
+        elif instruction:
+            meta_prompt = (
+                f"Você é um Engenheiro de Prompts e Arquiteto de Agentes especialista.\n"
+                f"Você precisa aprimorar o System Prompt de um agente chamado '{agent['name']}' ({agent['slug']}).\n\n"
+                f"--- PROMPT ATUAL ---\n{current_prompt}\n\n"
+                f"--- INSTRUÇÃO DE MELHORIA DO USUÁRIO ---\n{instruction}\n\n"
+                f"Reescreva o System Prompt completo do agente incorporando de forma harmoniosa e profissional a melhoria solicitada.\n"
+                f"Retorne EXCLUSIVAMENTE o novo texto do prompt completo, sem blocos de código ou explicações adicionais."
+            )
+            model = db.get_setting("active_model", "google/gemma-4-31b-qat")
+            messages = [{"role": "system", "content": meta_prompt}, {"role": "user", "content": "Refine o prompt agora."}]
+            try:
+                new_prompt = llm.chat_completion(model, messages, stream=False).strip()
+            except Exception as e:
+                return f"[ERRO] Falha ao gerar melhoria de prompt via LLM: {e}"
+        else:
+            return "[ERRO] Forneça 'instruction' (o que deseja melhorar) ou 'system_prompt' (o prompt atualizado)."
+
+        success = db.create_or_update_agent(
+            slug=slug,
+            name=name or agent["name"],
+            icon=icon or agent["icon"],
+            description=description or agent["description"],
+            system_prompt=new_prompt,
+            is_default=agent["is_default"]
+        )
+        if success:
+            return (
+                f"[SUCCESS] Agente '{agent['name']}' (`{slug}`) atualizado e aprimorado com sucesso!\n\n"
+                f"Novo Prompt:\n```markdown\n{new_prompt}\n```"
+            )
+        else:
+            return f"[ERRO] Falha ao salvar a atualização do agente '{slug}'."
+
+    elif action_clean == "delete":
+        if not slug:
+            return "[ERRO] Parâmetro 'slug' é obrigatório para exclusão."
+        if db.delete_agent(slug):
+            return f"[SUCCESS] Agente '{slug}' excluído com sucesso."
+        else:
+            return f"[ERRO] Não foi possível excluir o agente '{slug}' (ele pode ser um agente protegido do sistema ou não existir)."
+
+    return f"[ERRO] Ação '{action}' desconhecida para manage_agents_tool. Use: list | get_info | create | improve | delete."
+

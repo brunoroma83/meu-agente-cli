@@ -555,6 +555,167 @@ def handle_finance_card_command(parts: list, console: Console) -> None:
     else:
         console.print(f"[red]Subcomando de cartão inválido: '{subcmd}'. Opções: add, list, buy.[/red]")
 
+def handle_agent_command(parts: list, console: Console):
+    """Gerencia o comando /agent e seus subcomandos (list, use, info, create, improve, delete)."""
+    subcmd = parts[1].lower() if len(parts) > 1 else "list"
+
+    if subcmd in ["list", "ls"]:
+        agents = db.list_agents()
+        active_slug = db.get_active_agent_slug()
+        
+        table = Table(title="🤖 Central de Agentes (Agent Hub)", border_style="cyan")
+        table.add_column("Status", justify="center")
+        table.add_column("Ícone", justify="center")
+        table.add_column("Slug", style="cyan")
+        table.add_column("Nome", style="bold white")
+        table.add_column("Descrição", style="dim")
+        table.add_column("Tipo", style="blue")
+
+        for a in agents:
+            is_active = a["slug"] == active_slug
+            status_display = "[bold green]ATIVO ⭐[/bold green]" if is_active else ""
+            type_display = "Sistema" if a["is_default"] else "Customizado"
+            table.add_row(
+                status_display,
+                a["icon"],
+                a["slug"],
+                a["name"],
+                a["description"] or "",
+                type_display
+            )
+
+        console.print(table)
+        console.print("[dim]Comandos: /agent use <slug> | /agent info <slug> | /agent create | /agent improve <slug> <instrução> | /agent delete <slug>[/dim]\n")
+
+    elif subcmd in ["use", "switch", "ativar"]:
+        if len(parts) < 3:
+            console.print("[red]Uso correto: /agent use <slug> (ex: /agent use estudo ou /agent use geral)[/red]")
+            return
+
+        target_slug = parts[2].lower().strip()
+        target_agent = db.get_agent(target_slug)
+        if not target_agent:
+            console.print(f"[bold red]Erro:[/bold red] Agente '{target_slug}' não encontrado. Use [green]/agent list[/green] para ver os disponíveis.")
+            return
+
+        if db.set_active_agent_slug(target_slug):
+            console.print(Panel(
+                f"[bold green]Agente ativo alterado com sucesso![/bold green]\n\n"
+                f"• Nome: {target_agent['icon']} [bold cyan]{target_agent['name']}[/bold cyan] (`{target_agent['slug']}`)\n"
+                f"• Descrição: {target_agent['description']}\n\n"
+                f"[dim]Suas próximas mensagens serão processadas pelas diretrizes deste agente.[/dim]",
+                title="Troca de Agente",
+                border_style="green"
+            ))
+        else:
+            console.print("[bold red]Erro ao salvar configuração de agente ativo no banco.[/bold red]")
+
+    elif subcmd in ["info", "show"]:
+        if len(parts) < 3:
+            console.print("[red]Uso correto: /agent info <slug> (ex: /agent info estudo)[/red]")
+            return
+
+        target_slug = parts[2].lower().strip()
+        target_agent = db.get_agent(target_slug)
+        if not target_agent:
+            console.print(f"[bold red]Erro:[/bold red] Agente '{target_slug}' não encontrado.")
+            return
+
+        active_slug = db.get_active_agent_slug()
+        is_active = target_agent["slug"] == active_slug
+        status_tag = " [bold green](ATIVO ATUALMENTE)[/bold green]" if is_active else ""
+
+        info_text = (
+            f"[bold cyan]Ficha Técnica do Agente:[/bold cyan]{status_tag}\n\n"
+            f"• [bold]Slug:[/bold] `{target_agent['slug']}`\n"
+            f"• [bold]Nome:[/bold] {target_agent['icon']} {target_agent['name']}\n"
+            f"• [bold]Tipo:[/bold] {'Agente Padrão do Sistema' if target_agent['is_default'] else 'Agente Customizado'}\n"
+            f"• [bold]Descrição:[/bold] {target_agent['description']}\n\n"
+            f"[bold yellow]System Prompt:[/bold yellow]\n{target_agent['system_prompt']}"
+        )
+        console.print(Panel(info_text, title=f"Detalhes: {target_agent['name']}", border_style="cyan"))
+
+    elif subcmd in ["create", "novo"]:
+        console.print(Panel(
+            "[bold cyan]Assistente de Criação de Novo Agente Especialista[/bold cyan]\n"
+            "Preencha as informações do novo agente abaixo:",
+            border_style="cyan"
+        ))
+        slug = Prompt.ask("Slug / Identificador (ex: revisor, dev, tutor)").strip().lower()
+        if not slug:
+            console.print("[red]Criação cancelada: slug não pode ser vazio.[/red]")
+            return
+
+        if db.get_agent(slug):
+            console.print(f"[red]Já existe um agente com o slug '{slug}'. Escolha outro identificador.[/red]")
+            return
+
+        name = Prompt.ask("Nome de exibição (ex: Revisor de Artigos Científicos)").strip()
+        icon = Prompt.ask("Ícone / Emoji", default="🤖").strip()
+        description = Prompt.ask("Breve descrição da especialidade").strip()
+        
+        console.print("[yellow]Digite as diretrizes e o prompt de sistema do agente:[/yellow]")
+        system_prompt = Prompt.ask("System Prompt").strip()
+
+        if db.create_or_update_agent(slug, name, icon, description, system_prompt, is_default=False):
+            console.print(f"[bold green][SUCESSO][/bold green] Agente {icon} [bold cyan]{name}[/bold cyan] criado com sucesso!")
+            if Confirm.ask("Deseja ativar este agente agora?", default=True):
+                db.set_active_agent_slug(slug)
+                console.print(f"[bold green]Agente ativo alterado para '{name}'.[/bold green]")
+        else:
+            console.print("[bold red]Erro ao salvar agente no banco de dados.[/bold red]")
+
+    elif subcmd in ["improve", "melhorar", "refinar"]:
+        if len(parts) < 4:
+            console.print("[red]Uso correto: /agent improve <slug> <instrução de melhoria>[/red]\nEx: /agent improve estudo Sempre sugira exercícios práticos ao final")
+            return
+
+        slug = parts[2].lower().strip()
+        instruction = " ".join(parts[3:]).strip()
+
+        agent_data = db.get_agent(slug)
+        if not agent_data:
+            console.print(f"[bold red]Erro:[/bold red] Agente '{slug}' não encontrado.")
+            return
+
+        with console.status(f"[bold blue]Aprimorando prompt do agente '{agent_data['name']}' com IA...", spinner="dots"):
+            import meu_agente_cli.tools as cli_tools
+            res = cli_tools.manage_agents_tool(action="improve", slug=slug, instruction=instruction)
+
+        console.print(Panel(res, title=f"Melhoria do Agente: {agent_data['name']}", border_style="green"))
+
+    elif subcmd in ["delete", "del", "remover"]:
+        if len(parts) < 3:
+            console.print("[red]Uso correto: /agent delete <slug>[/red]")
+            return
+
+        slug = parts[2].lower().strip()
+        agent_data = db.get_agent(slug)
+        if not agent_data:
+            console.print(f"[bold red]Erro:[/bold red] Agente '{slug}' não encontrado.")
+            return
+
+        if agent_data["is_default"]:
+            console.print("[bold red]Não é permitido excluir agentes padrão do sistema.[/bold red]")
+            return
+
+        if Confirm.ask(f"Deseja realmente excluir o agente '{agent_data['name']}' (`{slug}`)?", default=False):
+            if db.delete_agent(slug):
+                console.print(f"[bold green]Agente '{slug}' excluído com sucesso.[/bold green]")
+            else:
+                console.print("[bold red]Erro ao excluir agente.[/bold red]")
+        else:
+            console.print("[yellow]Exclusão cancelada.[/yellow]")
+
+    else:
+        # Se digitou /agent <slug_direto>, tenta alternar diretamente
+        target_agent = db.get_agent(subcmd)
+        if target_agent:
+            db.set_active_agent_slug(subcmd)
+            console.print(f"[bold green]Agente ativo alterado para:[/bold green] {target_agent['icon']} [bold cyan]{target_agent['name']}[/bold cyan] (`{subcmd}`)")
+        else:
+            console.print(f"[red]Subcomando ou agente desconhecido: '{subcmd}'. Digite [green]/agent list[/green] para ver as opções.[/red]")
+
 def handle_slash_command(cmd_input: str) -> bool:
     """
     Processa os comandos com barra. Retorna True se o loop principal deve continuar,
@@ -591,10 +752,14 @@ def handle_slash_command(cmd_input: str) -> bool:
         else:
             console.print("[bold red]Erro ao realizar logout.[/bold red]")
 
+    elif command == "/agent":
+        handle_agent_command(parts, console)
+
     elif command == "/help":
         console.print(Panel(
             "[bold cyan]Comandos Disponíveis:[/bold cyan]\n"
             "- [green]/help[/green]: Mostra esta lista de ajuda.\n"
+            "- [green]/agent[/green]: Gerencia agentes especialistas. Opções: [green]/agent[/green] (listar), [green]/agent use <slug>[/green] (alternar), [green]/agent info <slug>[/green], [green]/agent create[/green], [green]/agent improve <slug> <instrução>[/green], [green]/agent delete <slug>[/green].\n"
             "- [green]/login <nome_usuario>[/green]: Inicia uma sessão de login válida por 24 horas.\n"
             "- [green]/logout[/green]: Encerra a sessão ativa do usuário.\n"
             "- [green]/status[/green]: Mostra conexões e estado atual de segurança.\n"
@@ -638,9 +803,13 @@ def handle_slash_command(cmd_input: str) -> bool:
         safe_str = "[bold green]SEGURO[/bold green]" if security.is_safe_mode() else "[bold red]NÃO-SEGURO[/bold red]"
         llm_provider = db.get_setting("llm_provider", "lm_studio")
         active_model = db.get_setting("active_model", "Nenhum")
+        active_slug = db.get_active_agent_slug()
+        agent_info = db.get_agent(active_slug)
+        agent_str = f"{agent_info['icon']} {agent_info['name']} ({active_slug})" if agent_info else active_slug
         
         console.print(f"[bold cyan]Status do Sistema:[/bold cyan]")
         console.print(f"- Modo de Segurança: {safe_str}")
+        console.print(f"- Agente Ativo: [bold yellow]{agent_str}[/bold yellow]")
         console.print(f"- Provedor Ativo: [yellow]{llm_provider.upper()}[/yellow]")
         console.print(f"- Modelo Ativo: [yellow]{active_model}[/yellow]")
         
@@ -870,6 +1039,24 @@ def handle_slash_command(cmd_input: str) -> bool:
                 console.print(f"[bold green]Lançamento #{rid} restaurado e ativo novamente![/bold green]")
             else:
                 console.print(f"[bold red]Falha ao restaurar lançamento #{rid}. Verifique se o ID existe.[/bold red]")
+            return True
+            
+        # Permite gerar projeção anual de gastos fixos: /finance project [ano]
+        if len(parts) > 1 and parts[1].lower() in ["project", "projetar", "previsao"]:
+            from datetime import datetime
+            target_year = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else datetime.now().year
+            res = db.project_annual_fixed_expenses(year=target_year, start_month=1)
+            gerados = res.get("gerados", 0)
+            tot_val = res.get("total_valor", 0.0)
+            meses = res.get("meses_afetados", [])
+            if gerados > 0:
+                meses_str = ", ".join(str(m) for m in meses)
+                console.print(f"[bold green]🔮 Previsão Anual de Gastos Fixos Gerada com Sucesso![/bold green]")
+                console.print(f"- Ano: [cyan]{target_year}[/cyan] (Meses afetados: [yellow]{meses_str}[/yellow])")
+                console.print(f"- Total de lançamentos criados: [bold green]{gerados}[/bold green]")
+                console.print(f"- Valor total projetado: [bold green]R$ {tot_val:.2f}[/bold green]")
+            else:
+                console.print(f"[yellow]ℹ️ Todas as contas fixas do ano {target_year} já estão projetadas e em dia (nenhuma duplicação gerada).[/yellow]")
             return True
             
         # Filtros e visualização
@@ -1163,7 +1350,10 @@ def main():
     while True:
         try:
             # Leitura do input com Rich Prompt para ficar elegante
-            user_input = Prompt.ask("\n[bold green]Você[/bold green]").strip()
+            active_slug = db.get_active_agent_slug()
+            agent_info = db.get_agent(active_slug)
+            agent_tag = f" [cyan]({agent_info['icon']} {agent_info['slug']})[/cyan]" if agent_info else ""
+            user_input = Prompt.ask(f"\n[bold green]Você[/bold green]{agent_tag}").strip()
             user_input = config.clean_string(user_input)
             if not user_input:
                 continue

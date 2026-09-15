@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 from datetime import datetime
 from typing import Optional, List, Tuple
 import matplotlib
@@ -24,7 +25,7 @@ def get_period_params(periodo_opcao: str, mes_personalizado: str = "") -> Option
         prox_mes = now.month + 1 if now.month < 12 else 1
         prox_ano = now.year if now.month < 12 else now.year + 1
         return f"{prox_mes:02d}-{prox_ano}"
-    elif periodo_opcao == "Mês Específico" and mes_personalizado.strip():
+    elif periodo_opcao == "Mês Específico" and mes_personalizado and mes_personalizado.strip():
         return mes_personalizado.strip()
     return None
 
@@ -47,10 +48,14 @@ def load_monthly_bills_tab(periodo_opcao: str, mes_personalizado: str = ""):
     proximos = [b["due_date"] for b in bills if not b["is_paid"] and b["due_date"]]
     prox_venc = min(proximos).strftime("%d/%m/%Y") if proximos else "Tudo pago! 🎉"
     
-    kpi_tot = f"## 📅 R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_pago = f"## 🟢 R$ {pagas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_pend = f"## ⏳ R$ {pendentes:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_prox = f"## ⏰ {prox_venc}"
+    v_tot = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_pago = f"R$ {pagas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_pend = f"R$ {pendentes:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    
+    kpi_tot = f"## 📅 {v_tot}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Compromissos do Mês</span>"
+    kpi_pago = f"## 🟢 {v_pago}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Contas Liquidadas</span>"
+    kpi_pend = f"## ⏳ {v_pend}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>A Pagar no Mês</span>"
+    kpi_prox = f"## ⏰ {prox_venc}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Vencimento Mais Próximo</span>"
     
     rows = []
     for b in bills:
@@ -89,8 +94,34 @@ def toggle_bill_payment_action(record_id_input: str, mark_as_paid: bool, periodo
     kpi_t, kpi_pg, kpi_pd, kpi_px, df = load_monthly_bills_tab(periodo_opcao, mes_personalizado)
     return msg, kpi_t, kpi_pg, kpi_pd, kpi_px, df
 
-def add_new_monthly_bill_action(nome: str, categoria: str, valor: float, dia_venc: int, periodo_opcao: str, mes_personalizado: str):
-    """Cadastra um novo compromisso mensal recorrente."""
+def project_annual_fixed_expenses_action(ano_input: int, periodo_opcao: str, mes_personalizado: str):
+    """Gera a projeção anual de todas as despesas fixas para o ano especificado."""
+    ano = int(ano_input) if ano_input and int(ano_input) > 2000 else datetime.now().year
+    res = db.project_annual_fixed_expenses(year=ano, start_month=1)
+    
+    gerados = res.get("gerados", 0)
+    tot_val = res.get("total_valor", 0.0)
+    meses = res.get("meses_afetados", [])
+    
+    if gerados > 0:
+        meses_str = ", ".join(str(m) for m in meses)
+        msg = f"🔮 **Previsão Anual Gerada!** {gerados} lançamento(s) criados para o ano {ano} (meses: {meses_str}), totalizando R$ {tot_val:,.2f} previstos com base nos últimos valores."
+    else:
+        msg = f"ℹ️ Todas as contas fixas recorrentes do ano {ano} já estão lançadas e em dia (nenhuma duplicação gerada)."
+        
+    kpi_t, kpi_pg, kpi_pd, kpi_px, df = load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+    return msg, kpi_t, kpi_pg, kpi_pd, kpi_px, df
+
+def add_new_monthly_bill_action(
+    nome: str, 
+    categoria: str, 
+    valor: float, 
+    dia_venc: int, 
+    projetar_ano: bool,
+    periodo_opcao: str, 
+    mes_personalizado: str
+):
+    """Cadastra um novo compromisso mensal recorrente com opção de projeção anual."""
     if not nome.strip():
         return "❌ O nome da conta é obrigatório.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
     if valor <= 0:
@@ -126,38 +157,421 @@ def add_new_monthly_bill_action(nome: str, categoria: str, valor: float, dia_ven
     except Exception:
         pass
         
-    msg = f"✅ Conta recorrente '{nome}' de R$ {valor:.2f} (Venc: dia {dia}) cadastrada com sucesso!"
+    extra_msg = ""
+    if projetar_ano:
+        proj_res = db.project_annual_fixed_expenses(year=y, start_month=1)
+        if proj_res.get("gerados", 0) > 0:
+            extra_msg = f" e projetada para {proj_res['gerados']} meses deste ano!"
+            
+    msg = f"✅ Conta recorrente '{nome}' de R$ {valor:.2f} (Venc: dia {dia}) cadastrada{extra_msg}"
     kpi_t, kpi_pg, kpi_pd, kpi_px, df = load_monthly_bills_tab(periodo_opcao, mes_personalizado)
     return msg, kpi_t, kpi_pg, kpi_pd, kpi_px, df
+
+def delete_monthly_bill_action(record_id_input: str, periodo_opcao: str, mes_personalizado: str):
+    """Exclui (soft delete) uma conta mensal fixa."""
+    if not record_id_input or not str(record_id_input).strip():
+        return "❌ Informe ou selecione o ID da conta a ser excluída.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+        
+    rid_str = str(record_id_input).strip()
+    if rid_str.startswith("card_"):
+        return "⚠️ Faturas de cartão são consolidadas a partir das compras do cartão. Para excluir compras ou parcelas, utilize a aba '💳 Cartões de Crédito'.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+        
+    try:
+        rid = int(rid_str)
+    except ValueError:
+        return f"❌ ID inválido: '{rid_str}'.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+        
+    rec = db.get_financial_record_by_id(rid)
+    if not rec:
+        return f"❌ Conta com ID #{rid} não encontrada ou já inativa.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+        
+    success = db.delete_financial_record(rid)
+    if success:
+        nome_desc = rec.get("description") or rec.get("category") or ""
+        msg = f"🗑️ Conta #{rid} ('{nome_desc}') excluída com sucesso!"
+    else:
+        msg = f"❌ Falha ao excluir a conta #{rid}."
+        
+    kpi_t, kpi_pg, kpi_pd, kpi_px, df = load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+    return msg, kpi_t, kpi_pg, kpi_pd, kpi_px, df
+
+def load_bill_data_for_edit(record_id_input: str):
+    """Busca os dados de uma conta para preencher o formulário de edição."""
+    if not record_id_input or not str(record_id_input).strip():
+        return gr.update(), gr.update(), gr.update(), gr.update(), "❌ Informe o ID da conta."
+    rid_str = str(record_id_input).strip()
+    if rid_str.startswith("card_"):
+        return gr.update(), gr.update(), gr.update(), gr.update(), "⚠️ Faturas de cartão são consolidadas a partir de compras. Para editar compras, use a aba '💳 Cartões de Crédito'."
+    try:
+        rid = int(rid_str)
+    except ValueError:
+        return gr.update(), gr.update(), gr.update(), gr.update(), f"❌ ID inválido: '{rid_str}'."
+        
+    rec = db.get_financial_record_by_id(rid)
+    if not rec:
+        return gr.update(), gr.update(), gr.update(), gr.update(), f"❌ Conta #{rid} não encontrada."
+        
+    dt_val = rec.get("due_date") or rec.get("date")
+    due_str = dt_val.strftime("%Y-%m-%d") if dt_val else ""
+    return (
+        rec.get("description", "") or "",
+        rec.get("category", "Condomínio"),
+        float(rec.get("amount", 0.0)),
+        due_str,
+        f"ℹ️ Dados da conta #{rid} carregados com sucesso."
+    )
+
+def update_monthly_bill_action(
+    record_id_input: str, 
+    nome: str, 
+    categoria: str, 
+    valor: float, 
+    vencimento: str, 
+    propagar: bool,
+    periodo_opcao: str, 
+    mes_personalizado: str
+):
+    """Atualiza as informações de uma conta fixa existente com suporte a propagação para meses seguintes."""
+    if not record_id_input or not str(record_id_input).strip():
+        return "❌ Informe o ID da conta a ser atualizada.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+        
+    rid_str = str(record_id_input).strip()
+    if rid_str.startswith("card_"):
+        return "⚠️ Faturas de cartão são consolidadas a partir das compras do cartão. Para editar compras, utilize a aba '💳 Cartões de Crédito'.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+        
+    try:
+        rid = int(rid_str)
+    except ValueError:
+        return f"❌ ID inválido: '{rid_str}'.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+        
+    if not nome or not nome.strip():
+        return "❌ O nome da conta é obrigatório.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+        
+    if valor is None or valor <= 0:
+        return "❌ O valor da conta deve ser maior que zero.", *load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+        
+    # Tratamento de vencimento: se for apenas número (dia do mês 1-31) ou data completa
+    venc_str = vencimento.strip() if vencimento else ""
+    if venc_str.isdigit() and 1 <= int(venc_str) <= 31:
+        month_year = get_period_params(periodo_opcao, mes_personalizado)
+        now = datetime.now()
+        if month_year and "-" in month_year:
+            m, y = int(month_year.split("-")[0]), int(month_year.split("-")[1])
+        else:
+            m, y = now.month, now.year
+        import calendar
+        max_d = calendar.monthrange(y, m)[1]
+        venc_str = f"{y:04d}-{m:02d}-{min(int(venc_str), max_d):02d}"
+        
+    # 1. Atualiza valor e vencimento (com propagação se selecionado)
+    success = db.update_monthly_bill(
+        record_id=rid,
+        new_amount=float(valor),
+        new_due_date=venc_str if venc_str else None,
+        propagate_future=bool(propagar)
+    )
+    
+    # 2. Atualiza descrição e categoria se alteradas
+    if success:
+        try:
+            db.update_financial_record(
+                record_id=rid,
+                description=nome.strip(),
+                category=categoria.strip() if categoria else "Outros",
+                amount=float(valor),
+                due_date=venc_str if venc_str else None
+            )
+        except Exception:
+            pass
+            
+        prop_msg = " e propagado para os meses seguintes deste ano!" if propagar else " com sucesso!"
+        msg = f"✅ Conta #{rid} ('{nome.strip()}') atualizada para R$ {valor:.2f}{prop_msg}"
+    else:
+        msg = f"❌ Falha ao atualizar a conta #{rid}. Verifique se o registro existe."
+        
+    kpi_t, kpi_pg, kpi_pd, kpi_px, df = load_monthly_bills_tab(periodo_opcao, mes_personalizado)
+    return msg, kpi_t, kpi_pg, kpi_pd, kpi_px, df
+
+def on_select_monthly_bill(evt: gr.SelectData, df: pd.DataFrame):
+    """Preenche automaticamente os formulários ao clicar em uma linha da tabela."""
+    if evt is None or evt.index is None:
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+    row_idx = evt.index[0]
+    if row_idx >= len(df):
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+    row = df.iloc[row_idx]
+    rid = str(row["ID"])
+    nome = str(row["Conta / Fatura"])
+    cat = str(row["Categoria"])
+    venc = str(row["Vencimento"])
+    
+    # Tratamento do valor formatado: ex: "R$ 1.250,00" -> 1250.0
+    val_raw = str(row["Valor"]).replace("R$", "").replace(".", "").replace(",", ".").strip()
+    try:
+        val = float(val_raw)
+    except ValueError:
+        val = 0.0
+        
+    due_iso = venc
+    if "/" in venc:
+        parts = venc.split("/")
+        if len(parts) == 3:
+            due_iso = f"{parts[2]}-{parts[1]}-{parts[0]}"
+            
+    return rid, rid, rid, nome, cat, val, due_iso
+
+# =====================================================================
+# ABA: RECEITAS & ENTRADAS
+# =====================================================================
+
+RECEITA_CATEGORIAS = ["Salário", "Freelance", "Investimentos", "Dividendos", "Pró-Labore", "Aluguel", "Reembolso", "Vendas", "Prêmio / Bônus", "Outros"]
+
+def load_incomes_tab(periodo_opcao: str, mes_personalizado: str = "", categoria: str = "Todas"):
+    """Carrega as receitas consolidadas do mês e calcula os KPIs de renda."""
+    month_year = get_period_params(periodo_opcao, mes_personalizado)
+    cat_filtro = None if categoria in ["Todas", "Todos", "", None] else categoria
+    incomes = db.get_monthly_incomes(month_year=month_year, category=cat_filtro)
+    
+    total = sum(item["amount"] for item in incomes)
+    salarios = sum(item["amount"] for item in incomes if item["category"].strip().lower() in ["salário", "salario", "pró-labore", "pro-labore", "remuneração", "fixo"])
+    extras = total - salarios
+    qtd = len(incomes)
+    
+    v_tot = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_sal = f"R$ {salarios:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_ext = f"R$ {extras:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    
+    kpi_tot = f"## 🟢 {v_tot}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Total de Receitas no Mês</span>"
+    kpi_sal = f"## 💼 {v_sal}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Salário / Renda Principal</span>"
+    kpi_ext = f"## 📈 {v_ext}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Rendas Extras / Outras</span>"
+    kpi_qtd = f"## 🔢 {qtd} entrada(s)\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Lançamentos no Mês</span>"
+    
+    rows = []
+    for item in incomes:
+        dt_val = item["due_date"] or item["date"]
+        dt_str = dt_val.strftime("%d/%m/%Y") if dt_val else "-"
+        val_str = f"R$ {item['amount']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        rows.append([
+            str(item["id"]),
+            item["description"],
+            item["category"],
+            dt_str,
+            val_str
+        ])
+        
+    df = pd.DataFrame(rows, columns=["ID", "Descrição / Fonte", "Categoria", "Data / Previsão", "Valor"])
+    return kpi_tot, kpi_sal, kpi_ext, kpi_qtd, df
+
+def add_income_action(descricao: str, categoria: str, valor: float, data_str: str, periodo_opcao: str, mes_personalizado: str, cat_filtro: str):
+    """Registra uma nova receita financeira."""
+    if not descricao or not descricao.strip():
+        return "❌ A descrição da receita é obrigatória.", *load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+    if valor is None or valor <= 0:
+        return "❌ O valor da receita deve ser maior que zero.", *load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+        
+    dt_clean = data_str.strip() if data_str else ""
+    if dt_clean.isdigit() and 1 <= int(dt_clean) <= 31:
+        month_year = get_period_params(periodo_opcao, mes_personalizado)
+        now = datetime.now()
+        if month_year and "-" in month_year:
+            m, y = int(month_year.split("-")[0]), int(month_year.split("-")[1])
+        else:
+            m, y = now.month, now.year
+        import calendar
+        max_d = calendar.monthrange(y, m)[1]
+        dt_clean = f"{y:04d}-{m:02d}-{min(int(dt_clean), max_d):02d}"
+    elif not dt_clean:
+        dt_clean = datetime.now().strftime("%Y-%m-%d")
+        
+    success = db.add_financial_record(
+        record_type="receita",
+        category=categoria.strip() if categoria else "Outros",
+        amount=float(valor),
+        description=descricao.strip(),
+        due_date=dt_clean
+    )
+    
+    if success:
+        msg = f"✅ Receita '{descricao.strip()}' de R$ {valor:.2f} lançada com sucesso!"
+    else:
+        msg = f"❌ Falha ao registrar receita."
+        
+    kpi_t, kpi_s, kpi_e, kpi_q, df = load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+    return msg, kpi_t, kpi_s, kpi_e, kpi_q, df
+
+def update_income_action(record_id_input: str, descricao: str, categoria: str, valor: float, data_str: str, periodo_opcao: str, mes_personalizado: str, cat_filtro: str):
+    """Atualiza as informações de uma receita existente."""
+    if not record_id_input or not str(record_id_input).strip():
+        return "❌ Informe o ID da receita a ser atualizada.", *load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+        
+    try:
+        rid = int(str(record_id_input).strip())
+    except ValueError:
+        return f"❌ ID inválido: '{record_id_input}'.", *load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+        
+    if not descricao or not descricao.strip():
+        return "❌ A descrição da receita é obrigatória.", *load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+    if valor is None or valor <= 0:
+        return "❌ O valor da receita deve ser maior que zero.", *load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+        
+    dt_clean = data_str.strip() if data_str else ""
+    if dt_clean.isdigit() and 1 <= int(dt_clean) <= 31:
+        month_year = get_period_params(periodo_opcao, mes_personalizado)
+        now = datetime.now()
+        if month_year and "-" in month_year:
+            m, y = int(month_year.split("-")[0]), int(month_year.split("-")[1])
+        else:
+            m, y = now.month, now.year
+        import calendar
+        max_d = calendar.monthrange(y, m)[1]
+        dt_clean = f"{y:04d}-{m:02d}-{min(int(dt_clean), max_d):02d}"
+        
+    success = db.update_financial_record(
+        record_id=rid,
+        description=descricao.strip(),
+        category=categoria.strip() if categoria else "Outros",
+        amount=float(valor),
+        due_date=dt_clean if dt_clean else None
+    )
+    
+    if success:
+        msg = f"✅ Receita #{rid} ('{descricao.strip()}') atualizada com sucesso!"
+    else:
+        msg = f"❌ Falha ao atualizar receita #{rid}. Verifique se o ID existe."
+        
+    kpi_t, kpi_s, kpi_e, kpi_q, df = load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+    return msg, kpi_t, kpi_s, kpi_e, kpi_q, df
+
+def delete_income_action(record_id_input: str, periodo_opcao: str, mes_personalizado: str, cat_filtro: str):
+    """Inativa logicamente (soft delete) uma receita."""
+    if not record_id_input or not str(record_id_input).strip():
+        return "❌ Informe ou selecione o ID da receita a excluir.", *load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+        
+    try:
+        rid = int(str(record_id_input).strip())
+    except ValueError:
+        return f"❌ ID inválido: '{record_id_input}'.", *load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+        
+    rec = db.get_financial_record_by_id(rid)
+    if not rec or str(rec.get("type", "")).lower() != "receita":
+        return f"❌ Receita #{rid} não encontrada ou já inativa.", *load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+        
+    success = db.delete_financial_record(rid)
+    if success:
+        msg = f"🗑️ Receita #{rid} ('{rec.get('description', '')}') excluída com sucesso!"
+    else:
+        msg = f"❌ Falha ao excluir a receita #{rid}."
+        
+    kpi_t, kpi_s, kpi_e, kpi_q, df = load_incomes_tab(periodo_opcao, mes_personalizado, cat_filtro)
+    return msg, kpi_t, kpi_s, kpi_e, kpi_q, df
+
+def load_income_data_for_edit(record_id_input: str):
+    """Carrega os dados de uma receita para o formulário de edição."""
+    if not record_id_input or not str(record_id_input).strip():
+        return gr.update(), gr.update(), gr.update(), gr.update(), "❌ Informe o ID da receita."
+    try:
+        rid = int(str(record_id_input).strip())
+    except ValueError:
+        return gr.update(), gr.update(), gr.update(), gr.update(), f"❌ ID inválido: '{record_id_input}'."
+        
+    rec = db.get_financial_record_by_id(rid)
+    if not rec or str(rec.get("type", "")).lower() != "receita":
+        return gr.update(), gr.update(), gr.update(), gr.update(), f"❌ Receita #{rid} não encontrada."
+        
+    dt_val = rec.get("due_date") or rec.get("date")
+    dt_iso = dt_val.strftime("%Y-%m-%d") if dt_val else ""
+    return (
+        rec.get("description", ""),
+        rec.get("category", "Salário"),
+        float(rec.get("amount", 0.0)),
+        dt_iso,
+        f"ℹ️ Dados da receita #{rid} carregados com sucesso."
+    )
+
+def on_select_income(evt: gr.SelectData, df: pd.DataFrame):
+    """Preenche os campos de exclusão e edição ao clicar em uma linha da tabela de receitas."""
+    if evt is None or evt.index is None:
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+    row_idx = evt.index[0]
+    if row_idx >= len(df):
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+    row = df.iloc[row_idx]
+    rid = str(row["ID"])
+    desc = str(row["Descrição / Fonte"])
+    cat = str(row["Categoria"])
+    dt_val = str(row["Data / Previsão"])
+    
+    val_raw = str(row["Valor"]).replace("R$", "").replace(".", "").replace(",", ".").strip()
+    try:
+        val = float(val_raw)
+    except ValueError:
+        val = 0.0
+        
+    dt_iso = dt_val
+    if "/" in dt_val:
+        parts = dt_val.split("/")
+        if len(parts) == 3:
+            dt_iso = f"{parts[2]}-{parts[1]}-{parts[0]}"
+            
+    return rid, rid, desc, cat, val, dt_iso
+
 
 # =====================================================================
 # ABA 2: CARTÕES DE CRÉDITO (EXTRATO POR CARTÃO)
 # =====================================================================
 
 def load_card_purchases_tab(cartao_selecionado: str, periodo_opcao: str, mes_personalizado: str = ""):
-    """Carrega o extrato de compras e faturas de um cartão específico."""
+    """Carrega o extrato de compras e faturas de um cartão específico ou de todos os cartões."""
     month_year = get_period_params(periodo_opcao, mes_personalizado)
     items = db.get_card_purchases(card_name=cartao_selecionado, month_year=month_year)
     total = sum(item["amount"] for item in items)
     all_paid = all(item["is_paid"] for item in items) if items else False
-    st_label = "🟢 Fatura Paga" if (all_paid and items) else ("⏳ Fatura em Aberto" if items else "Sem compras no mês")
+    
+    is_all_cards = not cartao_selecionado or cartao_selecionado in ["Todos os Cartões", "Todos", "Cartão de Crédito"]
+    
+    if items:
+        if all_paid:
+            st_label = "🟢 Fatura(s) Paga(s)"
+        else:
+            st_label = "⏳ Fatura em Aberto"
+    else:
+        st_label = "Sem compras no mês"
     
     vencimentos = [it["due_date"] for it in items if it["due_date"]]
-    venc_str = vencimentos[0].strftime("%d/%m/%Y") if vencimentos else "-"
+    if is_all_cards:
+        if vencimentos:
+            unique_venc = sorted(list(set(v.strftime("%d/%m") for v in vencimentos)))
+            venc_str = ", ".join(unique_venc) if len(unique_venc) <= 4 else f"{unique_venc[0]} a {unique_venc[-1]}"
+        else:
+            venc_str = "-"
+    else:
+        venc_str = vencimentos[0].strftime("%d/%m/%Y") if vencimentos else "-"
     
-    kpi_tot = f"## 💳 R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_venc = f"## 📅 {venc_str}"
-    kpi_qtd = f"## 🛍️ {len(items)} compras/parcelas"
-    kpi_status = f"## {st_label}"
+    if total < 0:
+        v_tot = f"-R$ {abs(total):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    else:
+        v_tot = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        
+    card_title = "Todas as Faturas" if is_all_cards else f"Fatura {cartao_selecionado}"
+    kpi_tot = f"## 💳 {v_tot}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>{card_title} no Mês</span>"
+    kpi_venc = f"## 📅 {venc_str}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Vencimento da Fatura</span>"
+    kpi_qtd = f"## 🛍️ {len(items)} compras/parcelas\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Itens na Fatura</span>"
+    kpi_status = f"## {st_label}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Situação do Pagamento</span>"
     
     rows = []
     for it in items:
         dt_venc = it["due_date"].strftime("%d/%m/%Y") if it["due_date"] else "-"
         dt_buy = it["buy_date"].strftime("%d/%m/%Y") if it["buy_date"] else "-"
-        st = "🟢 Paga" if it["is_paid"] else "⏳ Aberta"
-        val_str = f"R$ {it['amount']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        if it["amount"] < 0:
+            val_str = f"-R$ {abs(it['amount']):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            st = "↩️ Estorno/Crédito"
+        else:
+            val_str = f"R$ {it['amount']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            st = "🟢 Paga" if it["is_paid"] else "⏳ Aberta"
+            
         rows.append([
             it["id"],
+            it.get("card_name", "-"),
             it["description"],
             it["category"],
             val_str,
@@ -165,35 +579,62 @@ def load_card_purchases_tab(cartao_selecionado: str, periodo_opcao: str, mes_per
             dt_buy,
             st
         ])
-    df = pd.DataFrame(rows, columns=["ID", "Descrição da Compra", "Categoria", "Valor", "Vencimento na Fatura", "Data da Compra", "Status"])
+    df = pd.DataFrame(rows, columns=["ID", "Cartão", "Descrição da Compra", "Categoria", "Valor", "Vencimento na Fatura", "Data da Compra", "Status"])
     return kpi_tot, kpi_venc, kpi_qtd, kpi_status, df
 
+def refresh_card_purchases_tab(cartao_selecionado: str, periodo_opcao: str, mes_personalizado: str = ""):
+    """Atualiza as opções de cartões do banco e recarrega o extrato."""
+    db_cards = [c for c in db.get_distinct_cards() if c != "Cartão de Crédito"]
+    choices = ["Todos os Cartões"] + db_cards
+    sel = cartao_selecionado if cartao_selecionado in choices else "Todos os Cartões"
+    k_tot, k_venc, k_qtd, k_st, df = load_card_purchases_tab(sel, periodo_opcao, mes_personalizado)
+    return gr.update(choices=choices, value=sel), k_tot, k_venc, k_qtd, k_st, df
+
 def add_card_purchase_action(cartao: str, categoria: str, valor_total: float, parcelas: int, descricao: str, data_compra: str, periodo_opcao: str, mes_personalizado: str):
-    """Registra uma nova compra no cartão de crédito selecionado."""
-    if not cartao:
-        return "❌ Selecione um cartão de crédito.", *load_card_purchases_tab(cartao, periodo_opcao, mes_personalizado)
-    if valor_total <= 0:
-        return "❌ O valor da compra deve ser maior que zero.", *load_card_purchases_tab(cartao, periodo_opcao, mes_personalizado)
+    """Registra uma nova compra ou estorno no cartão de crédito selecionado."""
+    if not cartao or cartao.strip() in ["Todos os Cartões", "Todos"]:
+        return "❌ Selecione um cartão específico (ex: BB, C6, Itaú, Porto-Seguro).", gr.update(), *load_card_purchases_tab(cartao, periodo_opcao, mes_personalizado)
+    
+    try:
+        val_f = float(valor_total)
+    except (TypeError, ValueError):
+        val_f = 0.0
+        
+    if abs(val_f) < 0.001:
+        return "❌ O valor não pode ser zero. Digite um valor positivo para compra ou negativo para estorno.", gr.update(), *load_card_purchases_tab(cartao, periodo_opcao, mes_personalizado)
         
     p_count = max(1, int(parcelas))
-    desc = descricao.strip() if descricao.strip() else f"Compra no cartão {cartao}"
+    is_refund = val_f < 0
+    tipo_operacao = "Estorno" if is_refund else "Compra"
+    
+    cat_final = categoria.strip() if categoria and categoria.strip() else ("Estorno" if is_refund else "Outros")
+    
+    if not descricao or not descricao.strip():
+        desc = f"Estorno no cartão {cartao}" if is_refund else f"Compra no cartão {cartao}"
+    else:
+        desc = descricao.strip()
     
     success = db.add_card_purchase(
         card_name=cartao,
-        category=categoria.strip(),
-        total_amount=valor_total,
+        category=cat_final,
+        total_amount=val_f,
         installments=p_count,
         description=desc,
         buy_date_str=data_compra
     )
     
+    db_cards = [c for c in db.get_distinct_cards() if c != "Cartão de Crédito"]
+    choices = ["Todos os Cartões"] + db_cards
+    
+    valor_fmt = f"-R$ {abs(val_f):.2f}" if is_refund else f"R$ {val_f:.2f}"
+    
     if success:
-        msg = f"✅ Compra de R$ {valor_total:.2f} ({p_count}x) no cartão {cartao} lançada com sucesso!"
+        msg = f"✅ {tipo_operacao} de {valor_fmt} ({p_count}x) no cartão {cartao} lançado com sucesso!"
     else:
-        msg = f"❌ Falha ao registrar compra no cartão {cartao}."
+        msg = f"❌ Falha ao registrar {tipo_operacao.lower()} no cartão {cartao}."
         
     k_tot, k_vnc, k_q, k_st, df = load_card_purchases_tab(cartao, periodo_opcao, mes_personalizado)
-    return msg, k_tot, k_vnc, k_q, k_st, df
+    return msg, gr.update(choices=choices, value=cartao), k_tot, k_vnc, k_q, k_st, df
 
 # =====================================================================
 # ABA 3: GASTOS DIÁRIOS E TETO POR DIA (ORÇAMENTO DIÁRIO)
@@ -212,10 +653,15 @@ def load_daily_expenses_and_budget(periodo_opcao: str, mes_personalizado: str = 
     teto = budget["teto_diario"]
     status_hoje = budget["status_hoje"]
     
-    kpi_rec = f"## 🟢 R$ {rec:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_fixas = f"## 🔒 R$ {fixas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_livre = f"## 🛍️ R$ {livre_rest:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_teto = f"## 🎯 R$ {teto:,.2f} / dia".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_rec = f"R$ {rec:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_fixas = f"R$ {fixas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_livre = f"R$ {livre_rest:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_teto = f"R$ {teto:,.2f} / dia".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    kpi_rec = f"## 🟢 {v_rec}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Receitas Consolidadas</span>"
+    kpi_fixas = f"## 🔒 {v_fixas}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Comprometido no Mês</span>"
+    kpi_livre = f"## 🛍️ {v_livre}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Disponível para Gastos Diários</span>"
+    kpi_teto = f"## 🎯 {v_teto}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Limite Sugerido por Dia</span>"
     
     cor_hoje = "#10b981" if status_hoje == "ok" else "#ef4444"
     if status_hoje == "ok":
@@ -224,9 +670,9 @@ def load_daily_expenses_and_budget(periodo_opcao: str, mes_personalizado: str = 
         msg_meta = f"⚠️ <b>Atenção:</b> o gasto de hoje ultrapassou o teto diário recomendado!"
         
     status_card = f"""
-    <div style="background-color: #f1f5f9; padding: 12px 18px; border-radius: 8px; border-left: 5px solid {cor_hoje};">
+    <div style="background-color: rgba(241, 245, 249, 0.08); border: 1px solid rgba(148, 163, 184, 0.2); padding: 12px 18px; border-radius: 8px; border-left: 5px solid {cor_hoje};">
         <span style="font-size: 16px; font-weight: bold; color: {cor_hoje};">Gasto Realizado Hoje: R$ {gasto_hoje:,.2f}</span><br>
-        <span style="font-size: 13px; color: #475569;">{msg_meta}</span>
+        <span style="font-size: 13px; color: #94a3b8;">{msg_meta}</span>
     </div>
     """.replace(",", "X").replace(".", ",").replace("X", ".")
     
@@ -286,7 +732,7 @@ def load_financial_table_and_kpis(
     month_year = get_period_params(periodo_opcao, mes_personalizado)
     rec_type = tipo_filtro.lower() if tipo_filtro in ["Receita", "Despesa"] else None
     cat = None if categoria_filtro in ["Todas", "", None] else categoria_filtro
-    query = busca_texto.strip() if busca_texto.strip() else None
+    query = busca_texto.strip() if busca_texto and busca_texto.strip() else None
     
     if mostrar_inativos:
         raw_records = db.get_deleted_financial_records()
@@ -335,12 +781,15 @@ def load_financial_table_and_kpis(
         ])
         
     saldo = total_receitas - total_despesas
-    saldo_color = "green" if saldo >= 0 else "red"
+    saldo_color = "#10b981" if saldo >= 0 else "#ef4444"
+    v_rec = f"R$ {total_receitas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_desp = f"R$ {total_despesas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_saldo = f"R$ {saldo:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     
-    kpi_rec = f"## 🟢 R$ {total_receitas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_desp = f"## 🔴 R$ {total_despesas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_saldo = f"## <span style='color:{saldo_color}'>R$ {saldo:,.2f}</span>".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_venc = f"## ⏰ {contas_vencendo_hoje} conta(s)"
+    kpi_rec = f"## 🟢 {v_rec}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Total de Receitas</span>"
+    kpi_desp = f"## 🔴 {v_desp}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Total de Despesas</span>"
+    kpi_saldo = f"## <span style='color:{saldo_color}'>{v_saldo}</span>\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Saldo Líquido</span>"
+    kpi_venc = f"## ⏰ {contas_vencendo_hoje} conta(s)\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Vencendo Hoje</span>"
     
     df = pd.DataFrame(
         table_rows,
@@ -427,90 +876,74 @@ def generate_monthly_comparison_chart(year_input: int = datetime.now().year):
 # ABA 5: CARTEIRA DE INVESTIMENTOS
 # =====================================================================
 
-def load_investments_table_and_kpis(tipo_filtro: str, banco_filtro: str, busca_texto: str, mostrar_inativos: bool = False):
-    """Carrega dados consolidados da carteira de investimentos."""
-    summary = invest.get_investment_summary()
-    t_inv = summary["total_investido"]
-    t_atual = summary["valor_atual"]
-    lucro = summary["lucro_total"]
-    pct = summary["rentabilidade_pct"]
-    total_ativos = summary["total_ativos"]
+def load_invest_macro_kpis():
+    """Carrega os KPIs consolidados globais da carteira."""
+    resumo = invest.get_resumo_patrimonial_geral()
+    t_inv = resumo["total_investido"]
+    t_atual = resumo["valor_atual"]
+    lucro = resumo["lucro_total"]
+    pct = resumo["rentabilidade_pct"]
+    total_ativos = resumo["total_ativos"]
     
     lucro_cor = "green" if lucro >= 0 else "red"
     lucro_sinal = "+" if lucro > 0 else ""
     pct_sinal = "+" if pct > 0 else ""
     
-    kpi_inv = f"## 💼 R$ {t_inv:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_atual = f"## 📈 R$ {t_atual:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_lucro = f"## <span style='color:{lucro_cor}'>{lucro_sinal}R$ {lucro:,.2f}</span>".replace(",", "X").replace(".", ",").replace("X", ".")
-    kpi_rent = f"## <span style='color:{lucro_cor}'>{pct_sinal}{pct:.2f}%</span>"
-    kpi_qtd = f"## 🏛️ {total_ativos} ativo(s)"
+    v_inv = f"R$ {t_inv:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_atual = f"R$ {t_atual:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    v_lucro = f"{lucro_sinal}R$ {lucro:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     
-    records = invest.get_investments_filtered(tipo=tipo_filtro, banco=banco_filtro, query=busca_texto, active_only=(not mostrar_inativos))
-    rows = []
-    for r in records:
-        inv_id, nome, banco, tipo, qtd, v_inv, v_atual, luc, pct_item, dt_ini, dt_up, st, act = r
-        v_inv_f = float(v_inv) if v_inv is not None else 0.0
-        v_atual_f = float(v_atual) if v_atual is not None else v_inv_f
-        luc_f = float(luc) if luc is not None else (v_atual_f - v_inv_f)
-        pct_f = float(pct_item) if pct_item is not None else ((luc_f / v_inv_f * 100) if v_inv_f > 0 else 0.0)
-        
-        luc_str = f"{'+' if luc_f > 0 else ''}R$ {luc_f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        pct_str = f"{'+' if pct_f > 0 else ''}{pct_f:.2f}%"
-        dt_ini_str = dt_ini.strftime("%d/%m/%Y") if dt_ini else "-"
-        dt_up_str = dt_up.strftime("%d/%m/%Y") if dt_up else "-"
-        status_label = "🟢 Ativo" if act else "🔴 Inativo"
-        
-        rows.append([
-            inv_id, nome, banco, tipo, float(qtd) if qtd is not None else 1.0,
-            f"R$ {v_inv_f:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-            f"R$ {v_atual_f:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-            luc_str, pct_str, dt_ini_str, dt_up_str, status_label
-        ])
-        
-    df = pd.DataFrame(rows, columns=["ID", "Título / Ativo", "Instituição", "Classe", "Qtd", "Valor Investido", "Valor Atual", "Lucro/Prej", "Rentabilidade", "Data Início", "Última Atualização", "Status"])
-    return kpi_inv, kpi_atual, kpi_lucro, kpi_rent, kpi_qtd, df
+    kpi_inv = f"## 💼 {v_inv}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Total Investido (Custo)</span>"
+    kpi_atual = f"## 📈 {v_atual}\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Patrimônio Total a Mercado</span>"
+    kpi_lucro = f"## <span style='color:{lucro_cor}'>{v_lucro}</span>\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Lucro / Prejuízo Consolidado</span>"
+    kpi_rent = f"## <span style='color:{lucro_cor}'>{pct_sinal}{pct:.2f}%</span>\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Rentabilidade Global</span>"
+    kpi_qtd = f"## 🏛️ {total_ativos} ativo(s)\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Renda Fixa + Ações</span>"
+    
+    g_macro = generate_invest_macro_chart()
+    g_ativos = generate_invest_assets_chart()
+    return kpi_atual, kpi_inv, kpi_lucro, kpi_rent, kpi_qtd, g_macro, g_ativos
 
-def generate_invest_type_chart():
-    """Gera gráfico de rosca de alocação por classe de ativo."""
-    alloc = invest.get_allocation_by_type()
-    fig, ax = plt.subplots(figsize=(6, 4.5), facecolor="#f8fafc")
+def generate_invest_macro_chart():
+    """Gera gráfico de rosca de alocação macro (Renda Fixa vs Ações)."""
+    alloc = invest.get_alocacao_macro()
+    fig, ax = plt.subplots(figsize=(5.5, 4.2), facecolor="#f8fafc")
     ax.set_facecolor("#f8fafc")
     if not alloc:
-        ax.text(0.5, 0.5, "Nenhum investimento cadastrado", horizontalalignment='center', verticalalignment='center', fontsize=12, color="#64748b")
+        ax.text(0.5, 0.5, "Nenhum investimento cadastrado", horizontalalignment='center', verticalalignment='center', fontsize=11, color="#64748b")
         ax.axis('off')
         plt.tight_layout()
         return fig
     labels = list(alloc.keys())
     values = list(alloc.values())
-    colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#94a3b8']
+    colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6']
     wedges, texts, autotexts = ax.pie(values, labels=labels, autopct='%1.1f%%', startangle=140, pctdistance=0.75, colors=colors[:len(values)], wedgeprops=dict(width=0.45, edgecolor='white', linewidth=2))
     for autotext in autotexts:
         autotext.set_color('#1e293b')
         autotext.set_fontweight('bold')
         autotext.set_fontsize(9)
-    ax.set_title("Alocação por Classe de Ativo", fontsize=12, fontweight='bold', pad=15)
+    ax.set_title("Alocação Patrimonial (Classe)", fontsize=11, fontweight='bold', pad=12)
     plt.tight_layout()
     return fig
 
-def generate_invest_bank_chart():
-    """Gera gráfico de barras de alocação por instituição/banco."""
-    alloc = invest.get_allocation_by_bank()
-    fig, ax = plt.subplots(figsize=(6, 4.5), facecolor="#f8fafc")
+def generate_invest_assets_chart():
+    """Gera gráfico de barras de patrimônio por ativo/ticker."""
+    alloc = invest.get_alocacao_por_ativo()
+    fig, ax = plt.subplots(figsize=(6.5, 4.2), facecolor="#f8fafc")
     ax.set_facecolor("#f8fafc")
     if not alloc:
-        ax.text(0.5, 0.5, "Nenhum investimento cadastrado", horizontalalignment='center', verticalalignment='center', fontsize=12, color="#64748b")
+        ax.text(0.5, 0.5, "Nenhum ativo cadastrado", horizontalalignment='center', verticalalignment='center', fontsize=11, color="#64748b")
         ax.axis('off')
         plt.tight_layout()
         return fig
-    bancos = list(alloc.keys())
-    valores = list(alloc.values())
-    y_pos = range(len(bancos))
-    ax.barh(y_pos, valores, color='#3b82f6', edgecolor='white', alpha=0.9, height=0.55)
+    sorted_items = sorted(alloc.items(), key=lambda x: x[1], reverse=True)[:8]
+    ativos = [item[0] for item in sorted_items]
+    valores = [item[1] for item in sorted_items]
+    y_pos = range(len(ativos))
+    ax.barh(y_pos, valores, color='#10b981', edgecolor='white', alpha=0.9, height=0.55)
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(bancos, fontsize=10)
+    ax.set_yticklabels(ativos, fontsize=9)
     ax.invert_yaxis()
-    ax.set_title("Patrimônio por Instituição / Banco", fontsize=12, fontweight='bold', pad=15)
+    ax.set_title("Maiores Posições em Carteira (R$)", fontsize=11, fontweight='bold', pad=12)
     ax.grid(axis='x', linestyle='--', alpha=0.5)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -518,28 +951,179 @@ def generate_invest_bank_chart():
     plt.tight_layout()
     return fig
 
-def add_new_investment_action(nome: str, banco: str, tipo: str, qtd: float, valor: float, data_ini: str):
-    """Cadastra um novo investimento."""
-    if not nome.strip():
-        return "❌ O nome do ativo é obrigatório.", gr.update(), gr.update()
-    if valor <= 0:
-        return "❌ O valor investido deve ser maior que zero.", gr.update(), gr.update()
-    dt = data_ini.strip() if data_ini and data_ini.strip() else datetime.now().strftime("%Y-%m-%d")
-    success = invest.set_invest(nome_titulo=nome, nome_banco=banco, tipo_investimento=tipo, quantidade=qtd if qtd > 0 else 1.0, valor_investido=valor, data_inicio=dt, valor_atual=valor)
-    if success:
-        new_types = ["Todas"] + invest.get_distinct_investment_types()
-        new_banks = ["Todos"] + invest.get_distinct_banks()
-        return f"✅ Investimento '{nome}' cadastrado com sucesso!", gr.update(choices=new_types), gr.update(choices=new_banks)
-    return "❌ Erro ao salvar investimento no banco.", gr.update(), gr.update()
+def load_acoes_tab(filtro_ticker: str = "", filtro_op: str = "Todas"):
+    """Carrega tabela consolidada de ações e tabela de movimentações."""
+    # 1. Consolidado
+    posicoes = invest.get_consolidado_acoes(fetch_market_prices=True)
+    rows_cons = []
+    for p in posicoes:
+        if p["quantidade_custodia"] <= 0 and p["lucro_realizado"] == 0:
+            continue
+        cod = p["codigo_acao"]
+        qtd = p["quantidade_custodia"]
+        pm = p["preco_medio"]
+        custo = p["custo_total"]
+        cot = p["cotacao_atual"]
+        v_merc = p["valor_mercado"]
+        luc_nao_real = p["lucro_nao_realizado"]
+        rent = p["rentabilidade_pct"]
+        luc_real = p["lucro_realizado"]
+        
+        sinal_l = "+" if luc_nao_real > 0 else ""
+        sinal_r = "+" if rent > 0 else ""
+        sinal_lr = "+" if luc_real > 0 else ""
+        
+        rows_cons.append([
+            cod,
+            qtd,
+            f"R$ {pm:.2f}".replace(".", ","),
+            f"R$ {custo:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"R$ {cot:.2f}".replace(".", ",") if cot > 0 else "-",
+            f"R$ {v_merc:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"{sinal_l}R$ {luc_nao_real:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"{sinal_r}{rent:.2f}%",
+            f"{sinal_lr}R$ {luc_real:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        ])
+    df_cons = pd.DataFrame(rows_cons, columns=["Código", "Custódia", "Preço Médio", "Custo Total", "Cotação Atual", "Valor Mercado", "Lucro Não Realizado", "Rentabilidade", "Lucro Realizado"])
+    
+    # 2. Movimentações
+    movs = invest.get_movimentacoes_acoes(codigo_acao=filtro_ticker, operacao=filtro_op)
+    rows_mov = []
+    for m in movs:
+        dt_str = m["data_operacao"].strftime("%d/%m/%Y") if hasattr(m["data_operacao"], "strftime") else str(m["data_operacao"])
+        rows_mov.append([
+            m["id"],
+            dt_str,
+            m["codigo_acao"],
+            m["operacao"],
+            m["quantidade"],
+            f"R$ {m['preco_unitario']:.2f}".replace(".", ","),
+            f"R$ {m['taxas']:.2f}".replace(".", ","),
+            f"R$ {m['valor_total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        ])
+    df_mov = pd.DataFrame(rows_mov, columns=["ID", "Data", "Código", "Operação", "Qtd", "Preço Unit.", "Taxas", "Valor Total"])
+    return df_cons, df_mov
 
-def update_investment_quote_action(invest_id: int, novo_valor: float):
-    """Atualiza a cotação/valor atual de um investimento."""
-    if not invest_id or invest_id <= 0:
-        return "❌ Informe um ID válido."
-    success = invest.update_investment_valuation(int(invest_id), float(novo_valor))
-    if success:
-        return f"✅ Cotação do investimento #{invest_id} atualizada para R$ {novo_valor:.2f} com sucesso!"
-    return f"❌ Falha ao atualizar investimento #{invest_id}."
+def load_renda_fixa_tab(filtro_tipo: str = "Todas"):
+    """Carrega tabela consolidada de renda fixa e tabela de movimentações."""
+    # 1. Consolidado
+    titulos = invest.get_consolidado_renda_fixa(active_only=True)
+    rows_cons = []
+    dropdown_titulos = []
+    for t in titulos:
+        dropdown_titulos.append(f"#{t['id']} - {t['nome_titulo']}")
+        s_inv = t["saldo_investido"]
+        t_ap = t["total_aportado"]
+        t_resg = t["total_resgatado"]
+        t_jur = t["juros_recebidos"]
+        t_imp = t["impostos"]
+        v_at = t["valor_atual"]
+        luc = t["lucro_rendimento"]
+        pct = t["rentabilidade_pct"]
+        sinal_luc = "+" if luc > 0 else ""
+        sinal_pct = "+" if pct > 0 else ""
+        
+        rows_cons.append([
+            t["id"],
+            t["nome_titulo"],
+            t["nome_banco"],
+            t["tipo_investimento"],
+            f"R$ {s_inv:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"R$ {t_ap:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"R$ {t_resg:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"R$ {t_jur:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"R$ {t_imp:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"R$ {v_at:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"{sinal_luc}R$ {luc:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            f"{sinal_pct}{pct:.2f}%"
+        ])
+    df_cons = pd.DataFrame(rows_cons, columns=["ID", "Título / Ativo", "Instituição", "Classe", "Saldo Investido", "Total Aportado", "Total Resgatado", "Juros", "Impostos", "Valor Atual", "Rendimento", "Rentabilidade"])
+    
+    # 2. Movimentações
+    movs = invest.get_movimentacoes_renda_fixa(tipo=filtro_tipo)
+    rows_mov = []
+    for m in movs:
+        dt_str = m["data_movimentacao"].strftime("%d/%m/%Y") if hasattr(m["data_movimentacao"], "strftime") else str(m["data_movimentacao"])
+        rows_mov.append([
+            m["id"],
+            m["nome_titulo"],
+            m["nome_banco"],
+            dt_str,
+            m["tipo_movimentacao"],
+            f"R$ {m['valor']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        ])
+    df_mov = pd.DataFrame(rows_mov, columns=["ID", "Título", "Instituição", "Data", "Tipo Movimentação", "Valor"])
+    return df_cons, df_mov, gr.update(choices=dropdown_titulos), gr.update(choices=dropdown_titulos)
+
+def add_acao_action(codigo: str, operacao: str, qtd: float, preco: float, taxas: float, data_op: str):
+    """Registra uma movimentação de ação."""
+    if not codigo or not codigo.strip():
+        return "❌ Código da ação é obrigatório."
+    if qtd <= 0 or preco <= 0:
+        return "❌ Quantidade e preço devem ser maiores que zero."
+    ok, msg = invest.add_movimentacao_acao(
+        codigo_acao=codigo,
+        operacao=operacao,
+        quantidade=int(qtd),
+        preco_unitario=float(preco),
+        taxas=float(taxas or 0.0),
+        data_operacao=data_op.strip() if data_op else None
+    )
+    return f"✅ {msg}" if ok else f"❌ {msg}"
+
+def add_rf_mov_action(id_titulo_str: str, tipo_mov: str, valor: float, data_mov: str):
+    """Registra uma movimentação em título de renda fixa."""
+    if not id_titulo_str:
+        return "❌ Selecione um título válido."
+    try:
+        match = re.search(r'#(\d+)', id_titulo_str)
+        t_id = int(match.group(1)) if match else int(id_titulo_str)
+    except Exception:
+        return "❌ ID do título inválido."
+        
+    ok, msg = invest.add_movimentacao_renda_fixa(
+        id_investimento=t_id,
+        tipo_movimentacao=tipo_mov,
+        valor=float(valor or 0.0),
+        data_movimentacao=data_mov.strip() if data_mov else None
+    )
+    return f"✅ {msg}" if ok else f"❌ {msg}"
+
+def add_rf_titulo_action(nome: str, banco: str, tipo: str, dt_ini: str, valor_ini: float):
+    """Cadastra um novo título de renda fixa."""
+    if not nome or not nome.strip():
+        return "❌ O nome do título é obrigatório."
+    new_id = invest.cadastrar_titulo_renda_fixa(
+        nome_titulo=nome,
+        nome_banco=banco,
+        tipo_investimento=tipo,
+        data_inicio=dt_ini.strip() if dt_ini else None,
+        valor_inicial=float(valor_ini or 0.0)
+    )
+    if new_id:
+        return f"✅ Título '{nome}' cadastrado com sucesso (ID #{new_id})!"
+    return f"❌ Erro ao cadastrar título '{nome}'."
+
+def update_rf_valor_action(id_titulo_str: str, novo_valor: float):
+    """Atualiza o valor de mercado de um título de renda fixa."""
+    if not id_titulo_str:
+        return "❌ Selecione um título válido."
+    try:
+        match = re.search(r'#(\d+)', id_titulo_str)
+        t_id = int(match.group(1)) if match else int(id_titulo_str)
+    except Exception:
+        return "❌ ID do título inválido."
+        
+    ok, msg = invest.update_valor_atual_renda_fixa(t_id, float(novo_valor or 0.0))
+    return f"✅ {msg}" if ok else f"❌ {msg}"
+
+def migrar_legados_dashboard_action():
+    """Aciona migração de legados pelo dashboard."""
+    res = invest.migrar_investimentos_legados()
+    msgs = res.get("mensagens", [])
+    if not msgs:
+        return "ℹ️ Nenhuma migração necessária (tabelas de movimentação já continham registros ou não havia legados pendentes)."
+    return "✅ Migração concluída com sucesso:\n" + "\n".join(f"- {m}" for m in msgs)
 
 # =====================================================================
 # CONSTRUÇÃO DA INTERFACE GRADIO
@@ -548,7 +1132,8 @@ def update_investment_quote_action(invest_id: int, novo_valor: float):
 def build_dashboard():
     """Constrói a aplicação web completa com todas as visões integradas."""
     initial_cats = ["Todas"] + db.get_financial_categories()
-    initial_cards = db.get_distinct_cards()
+    initial_cards = [c for c in db.get_distinct_cards() if c != "Cartão de Crédito"]
+    card_choices = ["Todos os Cartões"] + initial_cards
     initial_invest_types = ["Todas"] + invest.get_distinct_investment_types()
     initial_invest_banks = ["Todos"] + invest.get_distinct_banks()
     
@@ -576,17 +1161,13 @@ def build_dashboard():
                 
                 with gr.Row():
                     with gr.Column(scale=1):
-                        kpi_m_total = gr.Markdown("## 📅 R$ 0,00", label="Total de Contas")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Compromissos do Mês</p>")
+                        kpi_m_total = gr.Markdown("## 📅 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Compromissos do Mês</span>")
                     with gr.Column(scale=1):
-                        kpi_m_pago = gr.Markdown("## 🟢 R$ 0,00", label="Já Pago")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Contas Liquidadas</p>")
+                        kpi_m_pago = gr.Markdown("## 🟢 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Contas Liquidadas</span>")
                     with gr.Column(scale=1):
-                        kpi_m_pend = gr.Markdown("## ⏳ R$ 0,00", label="Pendente")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>A Pagar no Mês</p>")
+                        kpi_m_pend = gr.Markdown("## ⏳ R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>A Pagar no Mês</span>")
                     with gr.Column(scale=1):
-                        kpi_m_prox = gr.Markdown("## ⏰ -", label="Próximo Vencimento")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Vencimento Mais Próximo</p>")
+                        kpi_m_prox = gr.Markdown("## ⏰ -\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Vencimento Mais Próximo</span>")
                         
                 gr.Markdown("---")
                 
@@ -602,8 +1183,10 @@ def build_dashboard():
                         visible=False
                     )
                     btn_m_atualizar = gr.Button("🔄 Atualizar Contas", variant="primary", scale=1)
+                    btn_m_projetar_ano = gr.Button("🔮 Previsão Anual de Gastos Fixos", variant="secondary", scale=1)
                     
                 filtro_m_periodo.change(toggle_custom_month, inputs=[filtro_m_periodo], outputs=[filtro_m_custom])
+                msg_m_proj = gr.Markdown()
                 
                 tabela_m_contas = gr.Dataframe(
                     headers=["ID", "Conta / Fatura", "Categoria", "Vencimento", "Valor", "Status", "Tipo"],
@@ -618,12 +1201,18 @@ def build_dashboard():
                 btn_m_atualizar.click(load_monthly_bills_tab, inputs=m_filter_inputs, outputs=m_filter_outputs)
                 filtro_m_periodo.change(load_monthly_bills_tab, inputs=m_filter_inputs, outputs=m_filter_outputs)
                 
+                btn_m_projetar_ano.click(
+                    lambda p, c: project_annual_fixed_expenses_action(datetime.now().year, p, c),
+                    inputs=[filtro_m_periodo, filtro_m_custom],
+                    outputs=[msg_m_proj, kpi_m_total, kpi_m_pago, kpi_m_pend, kpi_m_prox, tabela_m_contas]
+                )
+                
                 gr.Markdown("---")
                 
+                # Linha 1: Liquidação e Exclusão Rápida
                 with gr.Row():
-                    # Liquidação rápida
-                    with gr.Column(scale=2):
-                        gr.Markdown("### ✅ Marcar Pagamento de Conta / Fatura")
+                    with gr.Column(scale=1):
+                        gr.Markdown("### ✅ Marcar Pagamento de Conta / Fatura\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Dica: Clique em qualquer linha da tabela para preencher os campos automaticamente.</span>")
                         input_m_id = gr.Textbox(label="ID da Conta ou Fatura", placeholder="Ex: 121 (conta) ou card_Itau (fatura)")
                         with gr.Row():
                             btn_marcar_pago = gr.Button("🟢 Marcar como Paga", variant="primary")
@@ -641,26 +1230,197 @@ def build_dashboard():
                             outputs=[msg_m_acao, kpi_m_total, kpi_m_pago, kpi_m_pend, kpi_m_prox, tabela_m_contas]
                         )
                         
-                    # Cadastro de nova conta recorrente
-                    with gr.Column(scale=3):
-                        gr.Markdown("### ➕ Cadastrar Nova Conta Fixa Recorrente")
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 🗑️ Excluir Conta Fixa\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Inativa logicamente a entrada do mês preservando a integridade dos dados.</span>")
+                        del_m_id = gr.Textbox(label="ID da Conta a Excluir", placeholder="Ex: 121")
+                        btn_excluir_m = gr.Button("🗑️ Excluir Conta Fixa", variant="stop")
+                        msg_del_m = gr.Markdown()
+                        
+                        btn_excluir_m.click(
+                            delete_monthly_bill_action,
+                            inputs=[del_m_id, filtro_m_periodo, filtro_m_custom],
+                            outputs=[msg_del_m, kpi_m_total, kpi_m_pago, kpi_m_pend, kpi_m_prox, tabela_m_contas]
+                        )
+
+                gr.Markdown("---")
+
+                # Linha 2: Edição e Cadastro de Nova Conta
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### ✏️ Atualizar Informações da Conta Fixa\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Altere nome, categoria, valor ou data de vencimento da conta selecionada.</span>")
+                        with gr.Row():
+                            edit_m_id = gr.Textbox(label="ID da Conta", placeholder="Ex: 121", scale=2)
+                            btn_carregar_edit = gr.Button("🔍 Carregar Dados", scale=1)
+                        with gr.Row():
+                            edit_m_nome = gr.Textbox(label="Nome / Descrição da Conta", placeholder="Ex: Condomínio Edifício...")
+                            edit_m_cat = gr.Dropdown(choices=["Condomínio", "Casa", "Seguro", "Energia", "Internet", "Telefonia", "Curso", "Impostos", "Saúde", "Outros"], value="Condomínio", allow_custom_value=True, label="Categoria")
+                        with gr.Row():
+                            edit_m_valor = gr.Number(label="Novo Valor (R$)", value=0.0)
+                            edit_m_venc = gr.Textbox(label="Data de Vencimento", placeholder="YYYY-MM-DD ou Dia (1-31)")
+                        edit_m_propagar = gr.Checkbox(label="Propagar este novo valor para os meses seguintes deste ano", value=False)
+                        btn_salvar_edit = gr.Button("💾 Salvar Alterações", variant="primary")
+                        msg_edit_m = gr.Markdown()
+                        
+                        btn_carregar_edit.click(
+                            load_bill_data_for_edit,
+                            inputs=[edit_m_id],
+                            outputs=[edit_m_nome, edit_m_cat, edit_m_valor, edit_m_venc, msg_edit_m]
+                        )
+                        btn_salvar_edit.click(
+                            update_monthly_bill_action,
+                            inputs=[edit_m_id, edit_m_nome, edit_m_cat, edit_m_valor, edit_m_venc, edit_m_propagar, filtro_m_periodo, filtro_m_custom],
+                            outputs=[msg_edit_m, kpi_m_total, kpi_m_pago, kpi_m_pend, kpi_m_prox, tabela_m_contas]
+                        )
+
+                    with gr.Column(scale=1):
+                        gr.Markdown("### ➕ Cadastrar Nova Conta Fixa Recorrente\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Cadastra um compromisso recorrente e lança automaticamente no mês.</span>")
                         with gr.Row():
                             novo_m_nome = gr.Textbox(label="Nome da Conta", placeholder="Ex: Condomínio, Aluguel, Internet Fibra...")
                             novo_m_cat = gr.Dropdown(choices=["Condomínio", "Casa", "Seguro", "Energia", "Internet", "Telefonia", "Curso", "Impostos", "Saúde", "Outros"], value="Condomínio", allow_custom_value=True, label="Categoria")
                         with gr.Row():
                             novo_m_valor = gr.Number(label="Valor Estimado / Fixo (R$)", value=0.0)
                             novo_m_dia = gr.Number(label="Dia do Vencimento (1-31)", value=10, precision=0)
+                        novo_m_projetar = gr.Checkbox(label="Projetar para todos os meses do ano", value=True)
                         btn_salvar_m = gr.Button("💾 Cadastrar Conta Fixa", variant="primary")
                         msg_novo_m = gr.Markdown()
                         
                         btn_salvar_m.click(
                             add_new_monthly_bill_action,
-                            inputs=[novo_m_nome, novo_m_cat, novo_m_valor, novo_m_dia, filtro_m_periodo, filtro_m_custom],
+                            inputs=[novo_m_nome, novo_m_cat, novo_m_valor, novo_m_dia, novo_m_projetar, filtro_m_periodo, filtro_m_custom],
                             outputs=[msg_novo_m, kpi_m_total, kpi_m_pago, kpi_m_pend, kpi_m_prox, tabela_m_contas]
                         )
 
+                # Evento de clique na linha da tabela para autopreenchimento
+                tabela_m_contas.select(
+                    on_select_monthly_bill,
+                    inputs=[tabela_m_contas],
+                    outputs=[input_m_id, del_m_id, edit_m_id, edit_m_nome, edit_m_cat, edit_m_valor, edit_m_venc]
+                )
+
             # -------------------------------------------------------------
-            # ABA 2: CARTÕES DE CRÉDITO (EXTRATO POR CARTÃO)
+            # ABA 2: RECEITAS & ENTRADAS
+            # -------------------------------------------------------------
+            with gr.TabItem("💵 Receitas & Entradas"):
+                gr.Markdown("### 💵 Gestão de Receitas & Entradas Financeiras")
+                gr.Markdown("Cadastre suas fontes de renda (salário, freelances, dividendos, vendas), acompanhe os recebimentos do mês e atualize registros.")
+                
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        kpi_r_total = gr.Markdown("## 🟢 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Total de Receitas no Mês</span>")
+                    with gr.Column(scale=1):
+                        kpi_r_salario = gr.Markdown("## 💼 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Salário / Renda Principal</span>")
+                    with gr.Column(scale=1):
+                        kpi_r_extras = gr.Markdown("## 📈 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Rendas Extras / Outras</span>")
+                    with gr.Column(scale=1):
+                        kpi_r_qtd = gr.Markdown("## 🔢 0 entrada(s)\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Lançamentos no Mês</span>")
+                        
+                gr.Markdown("---")
+                
+                with gr.Row():
+                    filtro_r_periodo = gr.Radio(
+                        choices=["Mês Atual", "Próximo Mês", "Mês Específico"],
+                        value="Mês Atual",
+                        label="📅 Mês de Referência"
+                    )
+                    filtro_r_custom = gr.Textbox(
+                        label="Mês/Ano (MM-YYYY)",
+                        placeholder="Ex: 09-2026",
+                        visible=False
+                    )
+                    filtro_r_cat = gr.Dropdown(
+                        choices=["Todas"] + RECEITA_CATEGORIAS,
+                        value="Todas",
+                        label="🏷️ Categoria"
+                    )
+                    btn_r_atualizar = gr.Button("🔄 Atualizar Receitas", variant="primary", scale=1)
+                    
+                filtro_r_periodo.change(toggle_custom_month, inputs=[filtro_r_periodo], outputs=[filtro_r_custom])
+                
+                tabela_r_receitas = gr.Dataframe(
+                    headers=["ID", "Descrição / Fonte", "Categoria", "Data / Previsão", "Valor"],
+                    datatype=["str", "str", "str", "str", "str"],
+                    interactive=False,
+                    wrap=True
+                )
+                
+                r_filter_inputs = [filtro_r_periodo, filtro_r_custom, filtro_r_cat]
+                r_filter_outputs = [kpi_r_total, kpi_r_salario, kpi_r_extras, kpi_r_qtd, tabela_r_receitas]
+                
+                btn_r_atualizar.click(load_incomes_tab, inputs=r_filter_inputs, outputs=r_filter_outputs)
+                filtro_r_periodo.change(load_incomes_tab, inputs=r_filter_inputs, outputs=r_filter_outputs)
+                filtro_r_cat.change(load_incomes_tab, inputs=r_filter_inputs, outputs=r_filter_outputs)
+                
+                gr.Markdown("---")
+                
+                # Exclusão rápida
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 🗑️ Excluir Receita\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Dica: Clique em qualquer linha da tabela para selecionar a receita automaticamente.</span>")
+                        del_r_id = gr.Textbox(label="ID da Receita a Excluir", placeholder="Ex: 10")
+                        btn_excluir_r = gr.Button("🗑️ Excluir Receita", variant="stop")
+                        msg_del_r = gr.Markdown()
+                        
+                        btn_excluir_r.click(
+                            delete_income_action,
+                            inputs=[del_r_id, filtro_r_periodo, filtro_r_custom, filtro_r_cat],
+                            outputs=[msg_del_r, kpi_r_total, kpi_r_salario, kpi_r_extras, kpi_r_qtd, tabela_r_receitas]
+                        )
+                        
+                gr.Markdown("---")
+                
+                # Edição e Novo Cadastro
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### ✏️ Atualizar Informações da Receita\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Altere descrição, categoria, valor ou data da receita selecionada.</span>")
+                        with gr.Row():
+                            edit_r_id = gr.Textbox(label="ID da Receita", placeholder="Ex: 10", scale=2)
+                            btn_carregar_edit_r = gr.Button("🔍 Carregar Dados", scale=1)
+                        with gr.Row():
+                            edit_r_desc = gr.Textbox(label="Descrição / Fonte da Receita", placeholder="Ex: Salário Empresa...")
+                            edit_r_cat = gr.Dropdown(choices=RECEITA_CATEGORIAS, value="Salário", allow_custom_value=True, label="Categoria")
+                        with gr.Row():
+                            edit_r_valor = gr.Number(label="Novo Valor (R$)", value=0.0)
+                            edit_r_data = gr.Textbox(label="Data de Recebimento", placeholder="YYYY-MM-DD ou Dia (1-31)")
+                        btn_salvar_edit_r = gr.Button("💾 Salvar Alterações", variant="primary")
+                        msg_edit_r = gr.Markdown()
+                        
+                        btn_carregar_edit_r.click(
+                            load_income_data_for_edit,
+                            inputs=[edit_r_id],
+                            outputs=[edit_r_desc, edit_r_cat, edit_r_valor, edit_r_data, msg_edit_r]
+                        )
+                        btn_salvar_edit_r.click(
+                            update_income_action,
+                            inputs=[edit_r_id, edit_r_desc, edit_r_cat, edit_r_valor, edit_r_data, filtro_r_periodo, filtro_r_custom, filtro_r_cat],
+                            outputs=[msg_edit_r, kpi_r_total, kpi_r_salario, kpi_r_extras, kpi_r_qtd, tabela_r_receitas]
+                        )
+
+                    with gr.Column(scale=1):
+                        gr.Markdown("### ➕ Cadastrar Nova Receita\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Registre uma nova entrada de dinheiro (salário, freelance, dividendos, etc.).</span>")
+                        with gr.Row():
+                            novo_r_desc = gr.Textbox(label="Descrição / Fonte da Receita", placeholder="Ex: Salário Empresa, Freela Consultoria...")
+                            novo_r_cat = gr.Dropdown(choices=RECEITA_CATEGORIAS, value="Salário", allow_custom_value=True, label="Categoria")
+                        with gr.Row():
+                            novo_r_valor = gr.Number(label="Valor (R$)", value=0.0)
+                            novo_r_data = gr.Textbox(label="Data (YYYY-MM-DD ou Dia 1-31)", value=datetime.now().strftime("%Y-%m-%d"))
+                        btn_salvar_r = gr.Button("💾 Cadastrar Receita", variant="primary")
+                        msg_novo_r = gr.Markdown()
+                        
+                        btn_salvar_r.click(
+                            add_income_action,
+                            inputs=[novo_r_desc, novo_r_cat, novo_r_valor, novo_r_data, filtro_r_periodo, filtro_r_custom, filtro_r_cat],
+                            outputs=[msg_novo_r, kpi_r_total, kpi_r_salario, kpi_r_extras, kpi_r_qtd, tabela_r_receitas]
+                        )
+
+                # Evento de clique na linha da tabela de receitas para autopreenchimento
+                tabela_r_receitas.select(
+                    on_select_income,
+                    inputs=[tabela_r_receitas],
+                    outputs=[del_r_id, edit_r_id, edit_r_desc, edit_r_cat, edit_r_valor, edit_r_data]
+                )
+
+            # -------------------------------------------------------------
+            # ABA 3: CARTÕES DE CRÉDITO (EXTRATO POR CARTÃO)
             # -------------------------------------------------------------
             with gr.TabItem("💳 Cartões de Crédito"):
                 gr.Markdown("### 🛍️ Extrato Detalhado por Cartão de Crédito")
@@ -668,8 +1428,8 @@ def build_dashboard():
                 
                 with gr.Row():
                     filtro_c_cartao = gr.Dropdown(
-                        choices=initial_cards,
-                        value=initial_cards[0] if initial_cards else "Cartão de Crédito",
+                        choices=card_choices,
+                        value="Todos os Cartões",
                         label="💳 Selecione o Cartão",
                         interactive=True
                     )
@@ -689,21 +1449,17 @@ def build_dashboard():
                 
                 with gr.Row():
                     with gr.Column(scale=1):
-                        kpi_c_total = gr.Markdown("## 💳 R$ 0,00", label="Total da Fatura")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Fatura no Mês</p>")
+                        kpi_c_total = gr.Markdown("## 💳 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Fatura no Mês</span>")
                     with gr.Column(scale=1):
-                        kpi_c_venc = gr.Markdown("## 📅 -", label="Vencimento")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Vencimento da Fatura</p>")
+                        kpi_c_venc = gr.Markdown("## 📅 -\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Vencimento da Fatura</span>")
                     with gr.Column(scale=1):
-                        kpi_c_qtd = gr.Markdown("## 🛍️ 0 compras", label="Lançamentos")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Itens na Fatura</p>")
+                        kpi_c_qtd = gr.Markdown("## 🛍️ 0 compras\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Itens na Fatura</span>")
                     with gr.Column(scale=1):
-                        kpi_c_status = gr.Markdown("## ⏳ Aberta", label="Status")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Situação do Pagamento</p>")
+                        kpi_c_status = gr.Markdown("## ⏳ Aberta\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Situação do Pagamento</span>")
                         
                 tabela_c_compras = gr.Dataframe(
-                    headers=["ID", "Descrição da Compra", "Categoria", "Valor", "Vencimento na Fatura", "Data da Compra", "Status"],
-                    datatype=["number", "str", "str", "str", "str", "str", "str"],
+                    headers=["ID", "Cartão", "Descrição da Compra", "Categoria", "Valor", "Vencimento na Fatura", "Data da Compra", "Status"],
+                    datatype=["number", "str", "str", "str", "str", "str", "str", "str"],
                     interactive=False,
                     wrap=True
                 )
@@ -711,29 +1467,29 @@ def build_dashboard():
                 c_filter_inputs = [filtro_c_cartao, filtro_c_periodo, filtro_c_custom]
                 c_filter_outputs = [kpi_c_total, kpi_c_venc, kpi_c_qtd, kpi_c_status, tabela_c_compras]
                 
-                btn_c_atualizar.click(load_card_purchases_tab, inputs=c_filter_inputs, outputs=c_filter_outputs)
+                btn_c_atualizar.click(refresh_card_purchases_tab, inputs=c_filter_inputs, outputs=[filtro_c_cartao, *c_filter_outputs])
                 filtro_c_cartao.change(load_card_purchases_tab, inputs=c_filter_inputs, outputs=c_filter_outputs)
                 filtro_c_periodo.change(load_card_purchases_tab, inputs=c_filter_inputs, outputs=c_filter_outputs)
                 
                 gr.Markdown("---")
                 
-                # Formulário para lançar compra no cartão
-                gr.Markdown("### ➕ Lançar Nova Compra no Cartão")
+                # Formulário para lançar compra ou estorno no cartão
+                gr.Markdown("### ➕ Lançar Compra ou Estorno no Cartão\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Para estornos ou créditos que abatem a fatura, basta digitar o valor com sinal negativo (ex: -50.00).</span>")
                 with gr.Row():
-                    novo_c_cartao = gr.Dropdown(choices=initial_cards, value=initial_cards[0] if initial_cards else "Cartão de Crédito", label="Cartão Utilizado", allow_custom_value=True)
-                    novo_c_cat = gr.Dropdown(choices=["Alimentação", "Supermercado", "Eletrônicos", "Vestuário", "Lazer", "Farmácia", "Assinatura", "Outros"], value="Supermercado", allow_custom_value=True, label="Categoria")
-                    novo_c_valor = gr.Number(label="Valor Total da Compra (R$)", value=0.0)
+                    novo_c_cartao = gr.Dropdown(choices=initial_cards if initial_cards else ["BB", "C6", "Itau", "Porto-Seguro"], value=initial_cards[0] if initial_cards else "BB", label="Cartão Utilizado", allow_custom_value=True)
+                    novo_c_cat = gr.Dropdown(choices=["Alimentação", "Supermercado", "Eletrônicos", "Vestuário", "Lazer", "Farmácia", "Assinatura", "Estorno", "Outros"], value="Supermercado", allow_custom_value=True, label="Categoria")
+                    novo_c_valor = gr.Number(label="Valor (R$) [negativo para estornos]", value=0.0)
                     novo_c_parcelas = gr.Number(label="Número de Parcelas (1 = à vista)", value=1, precision=0)
                 with gr.Row():
-                    novo_c_desc = gr.Textbox(label="Descrição da Compra", placeholder="Ex: Supermercado Pão de Açúcar, Passagem aérea...")
-                    novo_c_data = gr.Textbox(label="Data da Compra (YYYY-MM-DD)", value=datetime.now().strftime("%Y-%m-%d"))
+                    novo_c_desc = gr.Textbox(label="Descrição da Compra / Estorno", placeholder="Ex: Supermercado Pão de Açúcar, Estorno compra cancelada...")
+                    novo_c_data = gr.Textbox(label="Data da Operação (YYYY-MM-DD)", value=datetime.now().strftime("%Y-%m-%d"))
                     btn_salvar_c = gr.Button("💳 Lançar no Cartão", variant="primary", scale=1)
                 msg_novo_c = gr.Markdown()
                 
                 btn_salvar_c.click(
                     add_card_purchase_action,
                     inputs=[novo_c_cartao, novo_c_cat, novo_c_valor, novo_c_parcelas, novo_c_desc, novo_c_data, filtro_c_periodo, filtro_c_custom],
-                    outputs=[msg_novo_c, kpi_c_total, kpi_c_venc, kpi_c_qtd, kpi_c_status, tabela_c_compras]
+                    outputs=[msg_novo_c, filtro_c_cartao, kpi_c_total, kpi_c_venc, kpi_c_qtd, kpi_c_status, tabela_c_compras]
                 )
 
             # -------------------------------------------------------------
@@ -760,17 +1516,13 @@ def build_dashboard():
                 
                 with gr.Row():
                     with gr.Column(scale=1):
-                        kpi_d_rec = gr.Markdown("## 🟢 R$ 0,00", label="Receitas do Mês")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Receitas Consolidadas</p>")
+                        kpi_d_rec = gr.Markdown("## 🟢 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Receitas Consolidadas</span>")
                     with gr.Column(scale=1):
-                        kpi_d_fixas = gr.Markdown("## 🔒 R$ 0,00", label="Custos Fixos & Faturas")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Comprometido no Mês</p>")
+                        kpi_d_fixas = gr.Markdown("## 🔒 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Comprometido no Mês</span>")
                     with gr.Column(scale=1):
-                        kpi_d_livre = gr.Markdown("## 🛍️ R$ 0,00", label="Saldo Livre Restante")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Disponível para Gastos Diários</p>")
+                        kpi_d_livre = gr.Markdown("## 🛍️ R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Disponível para Gastos Diários</span>")
                     with gr.Column(scale=1):
-                        kpi_d_teto = gr.Markdown("## 🎯 R$ 0,00 / dia", label="Teto Diário Recomendado")
-                        gr.Markdown("<p style='margin-top:-10px;color:#64748b;font-size:13px;'>Limite Sugerido por Dia</p>")
+                        kpi_d_teto = gr.Markdown("## 🎯 R$ 0,00 / dia\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Limite Sugerido por Dia</span>")
                         
                 # Card de status de hoje
                 status_card_d = gr.HTML()
@@ -823,13 +1575,13 @@ def build_dashboard():
                 
                 with gr.Row():
                     with gr.Column(scale=1):
-                        kpi_g_rec = gr.Markdown("## 🟢 R$ 0,00", label="Total de Receitas")
+                        kpi_g_rec = gr.Markdown("## 🟢 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Total de Receitas</span>")
                     with gr.Column(scale=1):
-                        kpi_g_desp = gr.Markdown("## 🔴 R$ 0,00", label="Total de Despesas")
+                        kpi_g_desp = gr.Markdown("## 🔴 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Total de Despesas</span>")
                     with gr.Column(scale=1):
-                        kpi_g_saldo = gr.Markdown("## R$ 0,00", label="Saldo Líquido")
+                        kpi_g_saldo = gr.Markdown("## R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Saldo Líquido</span>")
                     with gr.Column(scale=1):
-                        kpi_g_venc = gr.Markdown("## ⏰ 0", label="Vencendo Hoje")
+                        kpi_g_venc = gr.Markdown("## ⏰ 0\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Vencendo Hoje</span>")
                         
                 with gr.Row():
                     filtro_g_periodo = gr.Radio(choices=["Mês Atual", "Próximo Mês", "Todos os Meses", "Mês Específico"], value="Mês Atual", label="📅 Período")
@@ -875,84 +1627,215 @@ def build_dashboard():
             # ABA 5: CARTEIRA DE INVESTIMENTOS
             # -------------------------------------------------------------
             with gr.TabItem("💼 Carteira de Investimentos"):
-                gr.Markdown("### 📈 Visão Patrimonial Consolidada")
+                gr.Markdown("### 📈 Visão Geral do Patrimônio Investido")
                 with gr.Row():
                     with gr.Column(scale=1):
-                        kpi_inv_total = gr.Markdown("## 💼 R$ 0,00", label="Total Investido")
+                        kpi_macro_patrimonio = gr.Markdown("## 📈 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Patrimônio Total a Mercado</span>")
                     with gr.Column(scale=1):
-                        kpi_inv_atual = gr.Markdown("## 📈 R$ 0,00", label="Valor Atual de Mercado")
+                        kpi_macro_investido = gr.Markdown("## 💼 R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Total Investido (Custo)</span>")
                     with gr.Column(scale=1):
-                        kpi_inv_lucro = gr.Markdown("## R$ 0,00", label="Lucro / Prejuízo Total")
+                        kpi_macro_lucro = gr.Markdown("## R$ 0,00\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Lucro / Prejuízo Total</span>")
                     with gr.Column(scale=1):
-                        kpi_inv_rent = gr.Markdown("## 0,00%", label="Rentabilidade Global")
+                        kpi_macro_rent = gr.Markdown("## 0,00%\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Rentabilidade Global</span>")
                     with gr.Column(scale=1):
-                        kpi_inv_qtd = gr.Markdown("## 🏛️ 0 ativos", label="Posições")
+                        kpi_macro_qtd = gr.Markdown("## 🏛️ 0 ativos\n<span style='color:#94a3b8;font-size:12px;display:block;margin-top:2px;'>Renda Fixa + Ações</span>")
                         
                 with gr.Row():
-                    plot_inv_type = gr.Plot(label="Alocação por Classe de Ativo")
-                    plot_inv_bank = gr.Plot(label="Alocação por Instituição / Banco")
+                    plot_macro_aloc = gr.Plot(label="Alocação Patrimonial")
+                    plot_macro_ativos = gr.Plot(label="Maiores Posições (R$)")
                     
-                with gr.Row():
-                    filtro_inv_tipo = gr.Dropdown(choices=initial_invest_types, value="Todas", label="🏷️ Classe / Tipo")
-                    filtro_inv_banco = gr.Dropdown(choices=initial_invest_banks, value="Todos", label="🏛️ Instituição")
-                    filtro_inv_busca = gr.Textbox(label="🔍 Buscar Ativo", placeholder="Nome ou ticker...")
-                    check_inv_inativos = gr.Checkbox(label="Exibir Inativos", value=False)
-                    btn_inv_atualizar = gr.Button("🔄 Atualizar Carteira", variant="primary")
-                    
-                tabela_invest = gr.Dataframe(
-                    headers=["ID", "Título / Ativo", "Instituição", "Classe", "Qtd", "Valor Investido", "Valor Atual", "Lucro/Prej", "Rentabilidade", "Data Início", "Última Atualização", "Status"],
-                    datatype=["number", "str", "str", "str", "number", "str", "str", "str", "str", "str", "str", "str"],
-                    interactive=False,
-                    wrap=True
-                )
-                
-                inv_inputs = [filtro_inv_tipo, filtro_inv_banco, filtro_inv_busca, check_inv_inativos]
-                inv_outputs = [kpi_inv_total, kpi_inv_atual, kpi_inv_lucro, kpi_inv_rent, kpi_inv_qtd, tabela_invest]
-                
-                def refresh_invest_all(tipo, banco, busca, inativos):
-                    k_inv, k_at, k_luc, k_rent, k_qtd, df = load_investments_table_and_kpis(tipo, banco, busca, inativos)
-                    g_type = generate_invest_type_chart()
-                    g_bank = generate_invest_bank_chart()
-                    return k_inv, k_at, k_luc, k_rent, k_qtd, df, g_type, g_bank
-                    
-                btn_inv_atualizar.click(refresh_invest_all, inputs=inv_inputs, outputs=inv_outputs + [plot_inv_type, plot_inv_bank])
-                filtro_inv_tipo.change(load_investments_table_and_kpis, inputs=inv_inputs, outputs=inv_outputs)
-                filtro_inv_banco.change(load_investments_table_and_kpis, inputs=inv_inputs, outputs=inv_outputs)
-                check_inv_inativos.change(load_investments_table_and_kpis, inputs=inv_inputs, outputs=inv_outputs)
-                filtro_inv_busca.submit(load_investments_table_and_kpis, inputs=inv_inputs, outputs=inv_outputs)
+                btn_macro_refresh = gr.Button("🔄 Atualizar Indicadores Globais", variant="secondary")
+                macro_outputs = [kpi_macro_patrimonio, kpi_macro_investido, kpi_macro_lucro, kpi_macro_rent, kpi_macro_qtd, plot_macro_aloc, plot_macro_ativos]
+                btn_macro_refresh.click(load_invest_macro_kpis, outputs=macro_outputs)
                 
                 gr.Markdown("---")
-                with gr.Row():
-                    with gr.Column(scale=3):
-                        gr.Markdown("### ➕ Cadastrar Novo Ativo")
-                        novo_inv_nome = gr.Textbox(label="Título / Ativo", placeholder="Ex: Tesouro Selic 2029, PETR4, MXRF11...")
-                        with gr.Row():
-                            novo_inv_banco = gr.Dropdown(choices=["Banco do Brasil", "Itaú", "Bradesco", "Santander", "Nubank", "Inter", "XP Investimentos", "BTG Pactual", "Rico", "Outro"], value="Banco do Brasil", allow_custom_value=True, label="Instituição / Banco")
-                            novo_inv_tipo = gr.Dropdown(choices=["AÇÃO", "TESOURO DIRETO", "CDB / RENDA FIXA", "FII / FUNDO IMOBILIÁRIO", "FUNDO DE INVESTIMENTO", "CRIPTO", "OUTROS"], value="AÇÃO", allow_custom_value=True, label="Classe / Tipo")
-                        with gr.Row():
-                            novo_inv_qtd = gr.Number(label="Quantidade", value=1.0)
-                            novo_inv_valor = gr.Number(label="Valor Investido Total (R$)", value=0.0)
-                            novo_inv_data = gr.Textbox(label="Data Início (YYYY-MM-DD)", value=datetime.now().strftime("%Y-%m-%d"))
-                        btn_salvar_inv = gr.Button("💾 Cadastrar Ativo", variant="primary")
-                        msg_novo_inv = gr.Markdown()
-                        
-                    with gr.Column(scale=2):
-                        gr.Markdown("### 📈 Atualizar Cotação")
-                        cotacao_id = gr.Number(label="ID do Ativo", precision=0)
-                        cotacao_novo_valor = gr.Number(label="Novo Valor Atual (R$)")
-                        btn_atualizar_cotacao = gr.Button("📊 Atualizar Cotação", variant="primary")
-                        msg_cotacao = gr.Markdown()
-                        
-                btn_salvar_inv.click(add_new_investment_action, inputs=[novo_inv_nome, novo_inv_banco, novo_inv_tipo, novo_inv_qtd, novo_inv_valor, novo_inv_data], outputs=[msg_novo_inv, filtro_inv_tipo, filtro_inv_banco])
-                btn_atualizar_cotacao.click(update_investment_quote_action, inputs=[cotacao_id, cotacao_novo_valor], outputs=[msg_cotacao])
                 
+                with gr.Tabs():
+                    # =========================================================
+                    # SUB-ABA 1: AÇÕES (RENDA VARIÁVEL)
+                    # =========================================================
+                    with gr.TabItem("📈 Ações (Renda Variável)"):
+                        gr.Markdown("#### 📋 Posição Consolidada em Carteira (Custódia, Preço Médio e Lucro)")
+                        tabela_acoes_cons = gr.Dataframe(
+                            headers=["Código", "Custódia", "Preço Médio", "Custo Total", "Cotação Atual", "Valor Mercado", "Lucro Não Realizado", "Rentabilidade", "Lucro Realizado"],
+                            datatype=["str", "number", "str", "str", "str", "str", "str", "str", "str"],
+                            interactive=False,
+                            wrap=True
+                        )
+                        
+                        gr.Markdown("#### 📜 Extrato de Movimentações (Histórico de Ordens)")
+                        with gr.Row():
+                            filtro_acao_ticker = gr.Textbox(label="🔍 Filtrar por Código/Ticker", placeholder="Ex: PETR4, VALE3...")
+                            filtro_acao_op = gr.Dropdown(choices=["Todas", "COMPRA", "VENDA", "DESDOBRAMENTO"], value="Todas", label="Tipo de Operação")
+                            btn_acoes_refresh = gr.Button("🔄 Atualizar Ações", variant="primary")
+                            
+                        tabela_acoes_mov = gr.Dataframe(
+                            headers=["ID", "Data", "Código", "Operação", "Qtd", "Preço Unit.", "Taxas", "Valor Total"],
+                            datatype=["number", "str", "str", "str", "number", "str", "str", "str"],
+                            interactive=False,
+                            wrap=True
+                        )
+                        
+                        acoes_inputs = [filtro_acao_ticker, filtro_acao_op]
+                        acoes_outputs = [tabela_acoes_cons, tabela_acoes_mov]
+                        
+                        btn_acoes_refresh.click(load_acoes_tab, inputs=acoes_inputs, outputs=acoes_outputs)
+                        filtro_acao_ticker.submit(load_acoes_tab, inputs=acoes_inputs, outputs=acoes_outputs)
+                        filtro_acao_op.change(load_acoes_tab, inputs=acoes_inputs, outputs=acoes_outputs)
+                        
+                        gr.Markdown("---")
+                        gr.Markdown("#### ➕ Registrar Nova Operação de Ações")
+                        with gr.Row():
+                            acao_in_cod = gr.Textbox(label="Código da Ação", placeholder="Ex: PETR4, VALE3, ITUB4...")
+                            acao_in_op = gr.Dropdown(choices=["COMPRA", "VENDA", "DESDOBRAMENTO"], value="COMPRA", label="Operação")
+                            acao_in_qtd = gr.Number(label="Quantidade", value=100, precision=0)
+                            acao_in_preco = gr.Number(label="Preço Unitário (R$)", value=0.0)
+                            acao_in_taxas = gr.Number(label="Taxas / Corretagem (R$)", value=0.0)
+                            acao_in_dt = gr.Textbox(label="Data (YYYY-MM-DD)", value=datetime.now().strftime("%Y-%m-%d"))
+                            
+                        btn_salvar_acao = gr.Button("💾 Lançar Operação de Ação", variant="primary")
+                        msg_acao = gr.Markdown()
+                        
+                        def on_save_acao(cod, op, qtd, preco, taxas, dt, f_t, f_o):
+                            res = add_acao_action(cod, op, qtd, preco, taxas, dt)
+                            c_df, m_df = load_acoes_tab(f_t, f_o)
+                            k_at, k_in, k_lu, k_re, k_qt, g_m, g_at = load_invest_macro_kpis()
+                            return res, c_df, m_df, k_at, k_in, k_lu, k_re, k_qt, g_m, g_at
+                            
+                        btn_salvar_acao.click(
+                            on_save_acao,
+                            inputs=[acao_in_cod, acao_in_op, acao_in_qtd, acao_in_preco, acao_in_taxas, acao_in_dt, filtro_acao_ticker, filtro_acao_op],
+                            outputs=[msg_acao, tabela_acoes_cons, tabela_acoes_mov, kpi_macro_patrimonio, kpi_macro_investido, kpi_macro_lucro, kpi_macro_rent, kpi_macro_qtd, plot_macro_aloc, plot_macro_ativos]
+                        )
+
+                    # =========================================================
+                    # SUB-ABA 2: RENDA FIXA
+                    # =========================================================
+                    with gr.TabItem("🏦 Renda Fixa"):
+                        gr.Markdown("#### 📋 Posição Consolidada por Título (Saldo, Aportes, Juros e Rentabilidade)")
+                        tabela_rf_cons = gr.Dataframe(
+                            headers=["ID", "Título / Ativo", "Instituição", "Classe", "Saldo Investido", "Total Aportado", "Total Resgatado", "Juros", "Impostos", "Valor Atual", "Rendimento", "Rentabilidade"],
+                            datatype=["number", "str", "str", "str", "str", "str", "str", "str", "str", "str", "str", "str"],
+                            interactive=False,
+                            wrap=True
+                        )
+                        
+                        gr.Markdown("#### 📜 Extrato de Movimentações de Renda Fixa")
+                        with gr.Row():
+                            filtro_rf_tipo = gr.Dropdown(choices=["Todas", "APORTE", "RESGATE", "JUROS_RECEBIDOS", "IMPOSTO"], value="Todas", label="Tipo de Movimentação")
+                            btn_rf_refresh = gr.Button("🔄 Atualizar Renda Fixa", variant="primary")
+                            
+                        tabela_rf_mov = gr.Dataframe(
+                            headers=["ID", "Título", "Instituição", "Data", "Tipo Movimentação", "Valor"],
+                            datatype=["number", "str", "str", "str", "str", "str"],
+                            interactive=False,
+                            wrap=True
+                        )
+                        
+                        gr.Markdown("---")
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                gr.Markdown("#### ➕ Registrar Movimentação em Título")
+                                rf_in_dropdown_mov = gr.Dropdown(choices=[], label="Título de Renda Fixa")
+                                with gr.Row():
+                                    rf_in_tipo_mov = gr.Dropdown(choices=["APORTE", "RESGATE", "JUROS_RECEBIDOS", "IMPOSTO"], value="APORTE", label="Tipo")
+                                    rf_in_valor_mov = gr.Number(label="Valor (R$)", value=0.0)
+                                    rf_in_dt_mov = gr.Textbox(label="Data (YYYY-MM-DD)", value=datetime.now().strftime("%Y-%m-%d"))
+                                btn_salvar_rf_mov = gr.Button("💾 Registrar Movimentação", variant="primary")
+                                msg_rf_mov = gr.Markdown()
+                                
+                            with gr.Column(scale=2):
+                                gr.Markdown("#### 🏛️ Cadastrar Novo Título")
+                                rf_novo_nome = gr.Textbox(label="Nome do Título", placeholder="Ex: Tesouro Selic 2029, CDB Inter 110%...")
+                                with gr.Row():
+                                    rf_novo_banco = gr.Dropdown(choices=["Banco do Brasil", "Itaú", "Bradesco", "Santander", "Nubank", "Inter", "XP Investimentos", "BTG Pactual", "Rico", "Outro"], value="Banco do Brasil", allow_custom_value=True, label="Banco")
+                                    rf_novo_tipo = gr.Dropdown(choices=["TESOURO DIRETO", "CDB", "LCI", "LCA", "CRI", "CRA", "DEBÊNTURE", "FUNDO RENDA FIXA", "OUTROS"], value="CDB", allow_custom_value=True, label="Tipo")
+                                with gr.Row():
+                                    rf_novo_val_ini = gr.Number(label="Aporte Inicial (R$)", value=0.0)
+                                    rf_novo_dt_ini = gr.Textbox(label="Data Início (YYYY-MM-DD)", value=datetime.now().strftime("%Y-%m-%d"))
+                                btn_salvar_rf_titulo = gr.Button("💾 Cadastrar Título", variant="primary")
+                                msg_rf_titulo = gr.Markdown()
+                                
+                            with gr.Column(scale=1):
+                                gr.Markdown("#### 📈 Atualizar Cotação/Valor")
+                                rf_quote_dropdown = gr.Dropdown(choices=[], label="Título")
+                                rf_quote_novo_val = gr.Number(label="Novo Valor Atual (R$)")
+                                btn_salvar_rf_quote = gr.Button("📊 Atualizar Valor", variant="primary")
+                                msg_rf_quote = gr.Markdown()
+                                
+                        rf_outputs = [tabela_rf_cons, tabela_rf_mov, rf_in_dropdown_mov, rf_quote_dropdown]
+                        
+                        btn_rf_refresh.click(load_renda_fixa_tab, inputs=[filtro_rf_tipo], outputs=rf_outputs)
+                        filtro_rf_tipo.change(load_renda_fixa_tab, inputs=[filtro_rf_tipo], outputs=rf_outputs)
+                        
+                        def on_save_rf_mov(t_str, t_mov, val, dt, f_tipo):
+                            res = add_rf_mov_action(t_str, t_mov, val, dt)
+                            c_df, m_df, d1, d2 = load_renda_fixa_tab(f_tipo)
+                            k_at, k_in, k_lu, k_re, k_qt, g_m, g_at = load_invest_macro_kpis()
+                            return res, c_df, m_df, d1, d2, k_at, k_in, k_lu, k_re, k_qt, g_m, g_at
+                            
+                        btn_salvar_rf_mov.click(
+                            on_save_rf_mov,
+                            inputs=[rf_in_dropdown_mov, rf_in_tipo_mov, rf_in_valor_mov, rf_in_dt_mov, filtro_rf_tipo],
+                            outputs=[msg_rf_mov, tabela_rf_cons, tabela_rf_mov, rf_in_dropdown_mov, rf_quote_dropdown, kpi_macro_patrimonio, kpi_macro_investido, kpi_macro_lucro, kpi_macro_rent, kpi_macro_qtd, plot_macro_aloc, plot_macro_ativos]
+                        )
+                        
+                        def on_save_rf_titulo(nome, banco, tipo, dt, v_ini, f_tipo):
+                            res = add_rf_titulo_action(nome, banco, tipo, dt, v_ini)
+                            c_df, m_df, d1, d2 = load_renda_fixa_tab(f_tipo)
+                            k_at, k_in, k_lu, k_re, k_qt, g_m, g_at = load_invest_macro_kpis()
+                            return res, c_df, m_df, d1, d2, k_at, k_in, k_lu, k_re, k_qt, g_m, g_at
+                            
+                        btn_salvar_rf_titulo.click(
+                            on_save_rf_titulo,
+                            inputs=[rf_novo_nome, rf_novo_banco, rf_novo_tipo, rf_novo_dt_ini, rf_novo_val_ini, filtro_rf_tipo],
+                            outputs=[msg_rf_titulo, tabela_rf_cons, tabela_rf_mov, rf_in_dropdown_mov, rf_quote_dropdown, kpi_macro_patrimonio, kpi_macro_investido, kpi_macro_lucro, kpi_macro_rent, kpi_macro_qtd, plot_macro_aloc, plot_macro_ativos]
+                        )
+                        
+                        def on_update_rf_quote(t_str, novo_val, f_tipo):
+                            res = update_rf_valor_action(t_str, novo_val)
+                            c_df, m_df, d1, d2 = load_renda_fixa_tab(f_tipo)
+                            k_at, k_in, k_lu, k_re, k_qt, g_m, g_at = load_invest_macro_kpis()
+                            return res, c_df, m_df, d1, d2, k_at, k_in, k_lu, k_re, k_qt, g_m, g_at
+                            
+                        btn_salvar_rf_quote.click(
+                            on_update_rf_quote,
+                            inputs=[rf_quote_dropdown, rf_quote_novo_val, filtro_rf_tipo],
+                            outputs=[msg_rf_quote, tabela_rf_cons, tabela_rf_mov, rf_in_dropdown_mov, rf_quote_dropdown, kpi_macro_patrimonio, kpi_macro_investido, kpi_macro_lucro, kpi_macro_rent, kpi_macro_qtd, plot_macro_aloc, plot_macro_ativos]
+                        )
+
+                    # =========================================================
+                    # SUB-ABA 3: MIGRAÇÃO & DADOS LEGADOS
+                    # =========================================================
+                    with gr.TabItem("⚙️ Migração & Dados"):
+                        gr.Markdown("#### 🚀 Migração Automática de Dados Legados")
+                        gr.Markdown("Caso você tenha dados cadastrados na tabela antiga de investimentos, utilize o botão abaixo para migrar com segurança o Tesouro Direto para `movimentacao_renda_fixa` e as ações antigas para `movimentacao_acoes`.")
+                        btn_exec_migracao = gr.Button("🚀 Executar Migração de Legados", variant="secondary")
+                        msg_migracao = gr.Markdown()
+                        
+                        def on_migrar_click(f_a_t, f_a_o, f_rf_t):
+                            res = migrar_legados_dashboard_action()
+                            a_c, a_m = load_acoes_tab(f_a_t, f_a_o)
+                            rf_c, rf_m, d1, d2 = load_renda_fixa_tab(f_rf_t)
+                            k_at, k_in, k_lu, k_re, k_qt, g_m, g_at = load_invest_macro_kpis()
+                            return res, a_c, a_m, rf_c, rf_m, d1, d2, k_at, k_in, k_lu, k_re, k_qt, g_m, g_at
+                            
+                        btn_exec_migracao.click(
+                            on_migrar_click,
+                            inputs=[filtro_acao_ticker, filtro_acao_op, filtro_rf_tipo],
+                            outputs=[msg_migracao, tabela_acoes_cons, tabela_acoes_mov, tabela_rf_cons, tabela_rf_mov, rf_in_dropdown_mov, rf_quote_dropdown, kpi_macro_patrimonio, kpi_macro_investido, kpi_macro_lucro, kpi_macro_rent, kpi_macro_qtd, plot_macro_aloc, plot_macro_ativos]
+                        )
+                        
         # Cargas iniciais de todas as abas
         app.load(load_monthly_bills_tab, inputs=m_filter_inputs, outputs=m_filter_outputs)
+        app.load(load_incomes_tab, inputs=r_filter_inputs, outputs=r_filter_outputs)
         app.load(load_card_purchases_tab, inputs=c_filter_inputs, outputs=c_filter_outputs)
         app.load(load_daily_expenses_and_budget, inputs=d_filter_inputs, outputs=d_filter_outputs)
         app.load(load_financial_table_and_kpis, inputs=g_inputs, outputs=g_outputs)
         app.load(refresh_plots, inputs=[filtro_g_periodo, filtro_g_custom], outputs=[plot_donut, plot_bars])
-        app.load(refresh_invest_all, inputs=inv_inputs, outputs=inv_outputs + [plot_inv_type, plot_inv_bank])
+        app.load(load_invest_macro_kpis, outputs=macro_outputs)
+        app.load(load_acoes_tab, inputs=acoes_inputs, outputs=acoes_outputs)
+        app.load(load_renda_fixa_tab, inputs=[filtro_rf_tipo], outputs=rf_outputs)
         
     return app, theme
 

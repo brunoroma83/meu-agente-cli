@@ -13,6 +13,7 @@ def setup_logging():
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         
     log_file = CONFIG_DIR / "agent.log"
+    print(log_file)
     
     # Carrega a configuração local para obter o nível de log
     config = load_bootstrap_config()

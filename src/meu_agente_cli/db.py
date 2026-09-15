@@ -266,7 +266,108 @@ def init_database() -> bool:
                     active BOOLEAN DEFAULT TRUE
                 )
             """)
-            
+
+            # 6.1 Tabela movimentação de Investimentos
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS movimentacao_renda_fixa (
+                    id SERIAL PRIMARY KEY,
+                    id_investimento INT REFERENCES investimentos (id),
+                    tipo_movimentacao VARCHAR(50) NOT NULL CHECK (tipo_movimentacao IN ('APORTE', 'RESGATE','JUROS_RECEBIDOS', 'IMPOSTO')),
+                    valor NUMERIC(12, 2) NOT NULL,
+                    data_movimentacao DATE NOT NULL
+                );
+            """)
+            # 6.2 Tabela movimentação de ações
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS movimentacao_acoes (
+                    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    codigo_acao VARCHAR(10) NOT NULL,
+                    preco_unitario NUMERIC(15, 2) NOT NULL CHECK (preco_unitario > 0),
+                    quantidade INTEGER NOT NULL CHECK (quantidade > 0),
+                    taxas NUMERIC(15, 2) NOT NULL DEFAULT 0.00 CHECK (taxas >= 0),
+                    valor_total NUMERIC(15, 2) NOT NULL CHECK (valor_total > 0),
+                    data_operacao DATE NOT NULL DEFAULT CURRENT_DATE,
+                    operacao VARCHAR(20) NOT NULL CHECK (operacao IN ('COMPRA', 'VENDA', 'DESDOBRAMENTO')),
+                    relacao_id BIGINT REFERENCES movimentacao_acoes (id)
+                );
+            """)
+
+            # 6.3 Views Consolidadas de Investimentos
+            cur.execute("""
+                CREATE OR REPLACE VIEW vw_consolidado_renda_fixa AS
+                SELECT 
+                    i.id,
+                    i.nome_titulo,
+                    i.nome_banco,
+                    i.tipo_investimento,
+                    i.data_inicio,
+                    COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'APORTE' THEN m.valor ELSE 0 END), 0) AS total_aportado,
+                    COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'RESGATE' THEN m.valor ELSE 0 END), 0) AS total_resgatado,
+                    COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'APORTE' THEN m.valor 
+                                      WHEN m.tipo_movimentacao = 'RESGATE' THEN -m.valor ELSE 0 END), 0) AS saldo_investido,
+                    COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'JUROS_RECEBIDOS' THEN m.valor ELSE 0 END), 0) AS juros_recebidos,
+                    COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'IMPOSTO' THEN m.valor ELSE 0 END), 0) AS impostos,
+                    COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'JUROS_RECEBIDOS' THEN m.valor 
+                                      WHEN m.tipo_movimentacao = 'IMPOSTO' THEN -m.valor ELSE 0 END), 0) AS juros_liquidos,
+                    COALESCE(NULLIF(i.valor_atual, 0), 
+                             COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'APORTE' THEN m.valor 
+                                               WHEN m.tipo_movimentacao = 'RESGATE' THEN -m.valor 
+                                               WHEN m.tipo_movimentacao = 'JUROS_RECEBIDOS' THEN m.valor 
+                                               WHEN m.tipo_movimentacao = 'IMPOSTO' THEN -m.valor END), 0)) AS valor_atual,
+                    (COALESCE(NULLIF(i.valor_atual, 0), 
+                             COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'APORTE' THEN m.valor 
+                                               WHEN m.tipo_movimentacao = 'RESGATE' THEN -m.valor 
+                                               WHEN m.tipo_movimentacao = 'JUROS_RECEBIDOS' THEN m.valor 
+                                               WHEN m.tipo_movimentacao = 'IMPOSTO' THEN -m.valor END), 0)) -
+                     COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'APORTE' THEN m.valor 
+                                       WHEN m.tipo_movimentacao = 'RESGATE' THEN -m.valor ELSE 0 END), 0)) AS lucro_rendimento,
+                    CASE 
+                        WHEN COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'APORTE' THEN m.valor 
+                                               WHEN m.tipo_movimentacao = 'RESGATE' THEN -m.valor ELSE 0 END), 0) > 0 
+                        THEN ((COALESCE(NULLIF(i.valor_atual, 0), 
+                                        COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'APORTE' THEN m.valor 
+                                                          WHEN m.tipo_movimentacao = 'RESGATE' THEN -m.valor 
+                                                          WHEN m.tipo_movimentacao = 'JUROS_RECEBIDOS' THEN m.valor 
+                                                          WHEN m.tipo_movimentacao = 'IMPOSTO' THEN -m.valor END), 0)) -
+                               COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'APORTE' THEN m.valor 
+                                                 WHEN m.tipo_movimentacao = 'RESGATE' THEN -m.valor ELSE 0 END), 0)) / 
+                              COALESCE(SUM(CASE WHEN m.tipo_movimentacao = 'APORTE' THEN m.valor 
+                                                WHEN m.tipo_movimentacao = 'RESGATE' THEN -m.valor ELSE 0 END), 1) * 100)
+                        ELSE 0.0 
+                    END AS rentabilidade_pct,
+                    i.data_ultima_atualizacao,
+                    i.active
+                FROM investimentos i
+                LEFT JOIN movimentacao_renda_fixa m ON i.id = m.id_investimento
+                WHERE UPPER(i.tipo_investimento) NOT IN ('AÇÃO', 'AÇÕES', 'ACAO', 'ACOES')
+                GROUP BY i.id, i.nome_titulo, i.nome_banco, i.tipo_investimento, i.data_inicio, i.valor_atual, i.data_ultima_atualizacao, i.active;
+            """)
+
+            cur.execute("""
+                CREATE OR REPLACE VIEW vw_consolidado_acoes AS
+                SELECT
+                    codigo_acao,
+                    SUM(CASE 
+                        WHEN operacao = 'COMPRA' THEN quantidade 
+                        WHEN operacao = 'VENDA' THEN -quantidade 
+                        WHEN operacao = 'DESDOBRAMENTO' THEN quantidade
+                        ELSE 0 
+                    END) AS quantidade_custodia,
+                    SUM(CASE WHEN operacao = 'COMPRA' THEN valor_total ELSE 0 END) AS total_comprado,
+                    SUM(CASE WHEN operacao = 'VENDA' THEN valor_total ELSE 0 END) AS total_vendido,
+                    SUM(taxas) AS total_taxas,
+                    SUM(CASE WHEN operacao = 'COMPRA' THEN quantidade ELSE 0 END) AS qtd_total_comprada,
+                    SUM(CASE WHEN operacao = 'VENDA' THEN quantidade ELSE 0 END) AS qtd_total_vendida,
+                    CASE 
+                        WHEN SUM(CASE WHEN operacao = 'COMPRA' THEN quantidade ELSE 0 END) > 0 
+                        THEN (SUM(CASE WHEN operacao = 'COMPRA' THEN valor_total ELSE 0 END) / 
+                              SUM(CASE WHEN operacao = 'COMPRA' THEN quantidade ELSE 0 END))
+                        ELSE 0.0 
+                    END AS preco_medio_estimado,
+                    MAX(data_operacao) AS data_ultima_operacao
+                FROM movimentacao_acoes
+                GROUP BY codigo_acao;
+            """)
             # 7. Tabela de Transcrições de Áudio
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS audio_transcriptions (
@@ -317,6 +418,22 @@ def init_database() -> bool:
                     active BOOLEAN DEFAULT TRUE
                 )
             """)
+
+            # 11. Tabela de Agentes Especialistas (Agent Hub)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS agents (
+                    id SERIAL PRIMARY KEY,
+                    slug VARCHAR(50) UNIQUE NOT NULL,
+                    name VARCHAR(100) NOT NULL,
+                    icon VARCHAR(10) DEFAULT '🤖',
+                    description TEXT,
+                    system_prompt TEXT NOT NULL,
+                    allowed_tools TEXT[] DEFAULT NULL,
+                    is_default BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             
             # Migrations para bases de dados existentes
             cur.execute("ALTER TABLE user_notes ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
@@ -363,6 +480,12 @@ def init_database() -> bool:
             ensure_daily_finance_cron()
         except Exception as _cron_ex:
             logging.warning("Não foi possível verificar/criar cron job diário financeiro: %s", _cron_ex)
+
+        # Garante os agentes padrão (geral e estudo)
+        try:
+            seed_default_agents()
+        except Exception as _agent_ex:
+            logging.warning("Não foi possível verificar/criar agentes padrão: %s", _agent_ex)
 
         logging.info("Banco de dados inicializado com sucesso!")
         print("[SUCCESS] Banco de dados inicializado com sucesso!")
@@ -743,6 +866,84 @@ def get_financial_summary() -> Dict[str, float]:
         print(f"[ERROR] Erro ao calcular resumo financeiro: {e}", file=sys.stderr)
         return {"receitas": 0.0, "despesas": 0.0, "saldo": 0.0}
 
+def get_financial_record_by_id(record_id: int) -> Optional[Dict[str, Any]]:
+    """Busca um registro financeiro ativo pelo ID."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, type, category, amount, description, date, due_date, nature, card_name, is_paid, active
+                FROM financial_records 
+                WHERE id = %s AND active = TRUE
+                """,
+                (record_id,)
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "type": row[1],
+            "category": row[2],
+            "amount": float(row[3]),
+            "description": row[4],
+            "date": row[5],
+            "due_date": row[6],
+            "nature": row[7],
+            "card_name": row[8],
+            "is_paid": bool(row[9]),
+            "active": bool(row[10])
+        }
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar registro financeiro #{record_id}: {e}", file=sys.stderr)
+        return None
+
+def update_financial_record(
+    record_id: int,
+    description: Optional[str] = None,
+    category: Optional[str] = None,
+    amount: Optional[float] = None,
+    due_date: Optional[str] = None
+) -> bool:
+    """Atualiza os dados de um registro financeiro ativo existente."""
+    try:
+        fields = []
+        params = []
+        if description is not None:
+            fields.append("description = %s")
+            params.append(clean_string(description))
+        if category is not None:
+            fields.append("category = %s")
+            params.append(clean_string(category))
+        if amount is not None:
+            fields.append("amount = %s")
+            params.append(float(amount))
+        if due_date is not None:
+            dt_parsed = parse_date_str(due_date)
+            fields.append("due_date = %s")
+            params.append(dt_parsed)
+            fields.append("date = %s")
+            params.append(dt_parsed)
+            
+        if not fields:
+            return False
+            
+        params.append(int(record_id))
+        query = f"UPDATE financial_records SET {', '.join(fields)} WHERE id = %s AND active = TRUE"
+        
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(query, tuple(params))
+            updated = cur.rowcount > 0
+        conn.commit()
+        conn.close()
+        return updated
+    except Exception as e:
+        print(f"[ERROR] Erro ao atualizar registro financeiro #{record_id}: {e}", file=sys.stderr)
+        return False
+
 def delete_financial_record(record_id: int) -> bool:
     """Desativa (soft delete) um registro financeiro específico."""
     try:
@@ -935,25 +1136,260 @@ def delete_recurring_bill(bill_id: int) -> bool:
         print(f"[ERROR] Erro ao inativar conta recorrente: {e}", file=sys.stderr)
         return False
 
+def normalize_bill_name(name: str) -> str:
+    """Normaliza o nome da conta removendo acentuação e pontuações para deduplicação robusta."""
+    import unicodedata, re
+    if not name:
+        return ""
+    s = unicodedata.normalize('NFKD', str(name)).encode('ASCII', 'ignore').decode('ASCII')
+    s = re.sub(r'[^a-zA-Z0-9\s]', ' ', s)
+    return re.sub(r'\s+', ' ', s).strip().lower()
+
+def get_latest_fixed_bills_catalog() -> List[Dict[str, Any]]:
+    """
+    Retorna o catálogo consolidado das contas fixas recorrentes,
+    unificando os modelos cadastrados em recurring_bills e os últimos lançamentos
+    praticados em financial_records (nature = 'monthly').
+    """
+    catalog = {}
+    
+    # 1. Varre os lançamentos históricos ordenados pelo vencimento mais recente
+    # para capturar os últimos valores reais praticados no mês atual/recente
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT description, category, amount, due_date
+                FROM financial_records
+                WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'monthly'
+                ORDER BY COALESCE(due_date, date) DESC, id DESC
+            """)
+            rows = cur.fetchall()
+        conn.close()
+        
+        for desc, cat, amt, due_dt in rows:
+            if not desc:
+                continue
+            name_clean = desc.strip()
+            if name_clean.lower().startswith("fatura ") or "[" in name_clean:
+                continue
+                
+            norm_key = normalize_bill_name(name_clean)
+            if not norm_key:
+                continue
+                
+            due_day = due_dt.day if due_dt else 10
+            
+            # Como a ordenação é DESC, a primeira vez que encontramos norm_key é o lançamento MAIS RECENTE!
+            if norm_key not in catalog:
+                catalog[norm_key] = {
+                    "name": name_clean,
+                    "category": cat.strip() if cat else "Contas Fixas",
+                    "default_amount": float(amt),
+                    "due_day": due_day
+                }
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar histórico para catálogo: {e}", file=sys.stderr)
+        
+    # 2. Carrega/integra os modelos explícitos de recurring_bills
+    for rb in get_recurring_bills():
+        norm_key = normalize_bill_name(rb["name"])
+        if norm_key not in catalog:
+            catalog[norm_key] = {
+                "name": rb["name"].strip(),
+                "category": rb["category"].strip(),
+                "default_amount": float(rb["default_amount"]),
+                "due_day": int(rb["due_day"])
+            }
+        else:
+            if rb["name"]:
+                catalog[norm_key]["name"] = rb["name"].strip()
+                
+    return list(catalog.values())
+
+def project_annual_fixed_expenses(year: Optional[int] = None, start_month: int = 1) -> Dict[str, Any]:
+    """
+    Gera as previsões de saídas de gastos fixos para todos os meses do ano especificado
+    utilizando os últimos valores conhecidos de cada conta recorrente.
+    Não sobrescreve despesas que já foram cadastradas ou pagas.
+    """
+    if year is None:
+        year = datetime.now().year
+        
+    catalog = get_latest_fixed_bills_catalog()
+    if not catalog:
+        return {"gerados": 0, "total_valor": 0.0, "meses_afetados": [], "contas": []}
+        
+    import calendar
+    records_to_insert = []
+    generated_count = 0
+    total_amount = 0.0
+    affected_months = set()
+    
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            for m in range(start_month, 13):
+                # Busca as contas fixas que já existem neste mês/ano
+                cur.execute("""
+                    SELECT description
+                    FROM financial_records
+                    WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'monthly'
+                      AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
+                      AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
+                """, (m, year))
+                existing_norms = {normalize_bill_name(r[0]) for r in cur.fetchall() if r[0]}
+                
+                max_days = calendar.monthrange(year, m)[1]
+                
+                for item in catalog:
+                    norm_key = normalize_bill_name(item["name"])
+                    if norm_key in existing_norms:
+                        # Já existe lançamento dessa conta neste mês, não duplica
+                        continue
+                        
+                    due_d = min(item["due_day"], max_days)
+                    due_date_str = f"{year:04d}-{m:02d}-{due_d:02d}"
+                    reg_date_str = f"{year:04d}-{m:02d}-01"
+                    amt = float(item["default_amount"])
+                    
+                    records_to_insert.append((
+                        "despesa",
+                        clean_string(item["category"]),
+                        amt,
+                        clean_string(item["name"]),
+                        reg_date_str,
+                        due_date_str,
+                        "monthly",
+                        False, # is_paid
+                        True   # active
+                    ))
+                    generated_count += 1
+                    total_amount += amt
+                    affected_months.add(m)
+                    
+            if records_to_insert:
+                cur.executemany("""
+                    INSERT INTO financial_records 
+                    (type, category, amount, description, date, due_date, nature, is_paid, active)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, records_to_insert)
+                conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Erro ao projetar despesas fixas anuais: {e}", file=sys.stderr)
+        
+    return {
+        "gerados": generated_count,
+        "total_valor": round(total_amount, 2),
+        "meses_afetados": sorted(list(affected_months)),
+        "contas": [c["name"] for c in catalog]
+    }
+
+def update_monthly_bill(
+    record_id: int, 
+    new_amount: float, 
+    new_due_date: Optional[str] = None, 
+    propagate_future: bool = False
+) -> bool:
+    """
+    Atualiza o valor e/ou data de vencimento de uma conta mensal.
+    Se propagate_future for True, propaga o novo valor para as mesmas contas
+    dos meses subsequentes que ainda estejam em aberto (is_paid = FALSE).
+    """
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            # 1. Obtém dados do registro original
+            cur.execute("""
+                SELECT description, category, due_date, nature
+                FROM financial_records
+                WHERE id = %s AND active = TRUE
+            """, (record_id,))
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return False
+                
+            desc, cat, due_dt, nature = row
+            
+            # 2. Atualiza o registro alvo
+            sql_update = "UPDATE financial_records SET amount = %s"
+            params = [float(new_amount)]
+            if new_due_date and new_due_date.strip():
+                sql_update += ", due_date = %s"
+                params.append(new_due_date.strip())
+            sql_update += " WHERE id = %s"
+            params.append(record_id)
+            cur.execute(sql_update, tuple(params))
+            
+            # 3. Se propagate_future for True, propaga para meses posteriores do mesmo ano
+            if propagate_future and due_dt and desc:
+                cur_month = due_dt.month
+                cur_year = due_dt.year
+                norm_key = normalize_bill_name(desc)
+                
+                # Busca os IDs dos registros posteriores para atualizar
+                cur.execute("""
+                    SELECT id, description
+                    FROM financial_records
+                    WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'monthly'
+                      AND is_paid = FALSE
+                      AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
+                      AND EXTRACT(MONTH FROM COALESCE(due_date, date)) > %s
+                """, (cur_year, cur_month))
+                future_rows = cur.fetchall()
+                matching_ids = [r[0] for r in future_rows if normalize_bill_name(r[1]) == norm_key]
+                
+                if matching_ids:
+                    cur.execute("""
+                        UPDATE financial_records
+                        SET amount = %s
+                        WHERE id = ANY(%s)
+                    """, (float(new_amount), matching_ids))
+                    
+                # Atualiza também o default_amount no modelo recurring_bills
+                cur.execute("""
+                    SELECT id, name FROM recurring_bills WHERE active = TRUE
+                """)
+                rb_rows = cur.fetchall()
+                rb_match_ids = [r[0] for r in rb_rows if normalize_bill_name(r[1]) == norm_key]
+                if rb_match_ids:
+                    cur.execute("""
+                        UPDATE recurring_bills
+                        SET default_amount = %s
+                        WHERE id = ANY(%s)
+                    """, (float(new_amount), rb_match_ids))
+                    
+            conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao atualizar conta mensal: {e}", file=sys.stderr)
+        return False
+
 def get_distinct_cards() -> List[str]:
     """Retorna a lista unificada de todos os cartões cadastrados e usados."""
     cards = set()
     # Dos settings configurados
     cfg = get_credit_cards().get("cartoes", {})
     for c in cfg.keys():
-        cards.add(c)
+        if c and c.strip():
+            cards.add(c.strip())
     # Dos registros do banco
     try:
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute("SELECT DISTINCT card_name FROM financial_records WHERE card_name IS NOT NULL AND card_name != '' AND active = TRUE")
             for row in cur.fetchall():
-                if row[0]:
-                    cards.add(row[0])
+                if row[0] and row[0].strip() and row[0].strip() != "Cartão de Crédito":
+                    cards.add(row[0].strip())
         conn.close()
     except Exception:
         pass
-    return sorted(list(cards)) if cards else ["Cartão de Crédito"]
+    if not cards:
+        return ["BB", "C6", "Itau", "Porto-Seguro"]
+    return sorted(list(cards))
 
 def get_monthly_bills(month_year: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -1191,9 +1627,10 @@ def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str
                   AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
             """
             params = [m, y]
-            if card_name and card_name not in ["Todos", "Todas", "", None]:
+            c_clean = card_name.strip() if card_name and isinstance(card_name, str) else ""
+            if c_clean and c_clean not in ["Todos", "Todas", "Todos os Cartões", "todos os cartões", "Cartão de Crédito"]:
                 sql += " AND UPPER(card_name) = %s"
-                params.append(card_name.strip().upper())
+                params.append(c_clean.upper())
                 
             sql += " ORDER BY due_date ASC, id ASC"
             cur.execute(sql, tuple(params))
@@ -1212,6 +1649,51 @@ def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str
     except Exception as e:
         print(f"[ERROR] Erro ao buscar compras de cartão: {e}", file=sys.stderr)
     return items
+
+def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retorna as receitas ativas para o mês especificado."""
+    now = datetime.now()
+    if month_year and "-" in month_year:
+        parts = month_year.split("-")
+        m, y = int(parts[0]), int(parts[1])
+    else:
+        m, y = now.month, now.year
+        
+    incomes = []
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            sql = """
+                SELECT id, category, amount, description, COALESCE(due_date, date), date
+                FROM financial_records
+                WHERE active = TRUE AND lower(type) = 'receita'
+                  AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
+                  AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
+            """
+            params = [m, y]
+            if category and category not in ["Todas", "Todos", "", None]:
+                sql += " AND lower(category) = %s"
+                params.append(category.strip().lower())
+            if query and query.strip():
+                sql += " AND (description ILIKE %s OR category ILIKE %s)"
+                termo = f"%{query.strip()}%"
+                params.extend([termo, termo])
+                
+            sql += " ORDER BY COALESCE(due_date, date) ASC, id ASC"
+            cur.execute(sql, tuple(params))
+            for r in cur.fetchall():
+                incomes.append({
+                    "id": r[0],
+                    "category": r[1],
+                    "amount": float(r[2]),
+                    "description": r[3] or "",
+                    "due_date": r[4],
+                    "date": r[5]
+                })
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar receitas: {e}", file=sys.stderr)
+    return incomes
 
 def get_daily_expenses(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None) -> List[Tuple]:
     """Retorna exclusivamente as despesas rotineiras diárias (nature = 'daily')."""
@@ -1411,6 +1893,44 @@ def update_cron_job_runs(job_id: int, last_run: datetime, next_run: datetime) ->
         print(f"[ERROR] Erro ao atualizar cronjob: {e}", file=sys.stderr)
         return False
 
+def update_cron_job(job_id: int, name: Optional[str], cron_expression: Optional[str], task_prompt: Optional[str]) -> bool:
+    """Atualiza um cronjob."""
+    try:
+        conn = get_connection()
+        # pega as informações do cronjob a ser atualizado
+        active_jobs = get_active_cron_jobs()
+        job = None
+        job_id_found = False
+        for job in active_jobs:
+            if job["id"] == job_id:
+                job_id_found = True
+                if name:
+                    job["name"] = name
+                if cron_expression:
+                    job["cron_expression"] = cron_expression
+                if task_prompt:
+                    job["task_prompt"] = task_prompt
+                break
+        if not job_id_found:
+            logging.error(f"Erro: Job ID {job_id} não encontrado.")
+            print(f"Erro: Job ID {job_id} não encontrado.", file=sys.stderr)
+            return False
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE cron_jobs SET name = %s, cron_expression = %s, task_prompt = %s WHERE id = %s",
+                (job["name"], job["cron_expression"], job["task_prompt"], job_id)
+            )
+        conn.commit()
+        conn.close()
+        # salvar no log a alteração do cronjob
+        logging.info(f"Cronjob #{job_id} atualizado: {job}")
+        print(f"Cronjob #{job_id} atualizado: {job}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao atualizar cronjob: {e}", file=sys.stderr)
+        logging.error(f"Erro ao atualizar cronjob: {e}")
+        return False
+
 def delete_cron_job(job_id: int) -> bool:
     """Desativa (soft delete) um cronjob."""
     try:
@@ -1486,6 +2006,8 @@ def generate_sql_dump() -> str:
         "user_profile",        # FK para users
         "users",
         "tecnovigilancia",
+        "movimentacao_renda_fixa", # FK para investimentos (deve ser apagada antes)
+        "movimentacao_acoes",
         "investimentos",
         "audio_transcriptions",
         "cron_jobs",
@@ -1522,7 +2044,7 @@ def generate_sql_dump() -> str:
                     
                 col_names = [desc[0] for desc in cur.description]
                 cols_str = ", ".join(col_names)
-                override = " OVERRIDING SYSTEM VALUE" if table in ["users", "tecnovigilancia"] else ""
+                override = " OVERRIDING SYSTEM VALUE" if table in ["users", "tecnovigilancia", "movimentacao_acoes"] else ""
                 
                 for row in rows:
                     formatted_vals = [_format_sql_value(v) for v in row]
@@ -1535,6 +2057,8 @@ def generate_sql_dump() -> str:
                 ("financial_records", "id"),
                 ("cron_jobs", "id"),
                 ("investimentos", "id"),
+                ("movimentacao_renda_fixa", "id"),
+                ("movimentacao_acoes", "id"),
                 ("audio_transcriptions", "id"),
                 ("chat_history", "id"),
                 ("vinhos", "id"),
@@ -1829,3 +2353,177 @@ def get_active_username() -> str:
     """Retorna o usuário atualmente logado ou 'default' como fallback."""
     logged_user = get_logged_in_user()
     return logged_user if logged_user else "default"
+
+# =====================================================================
+# GERENCIAMENTO DE AGENTES (AGENT HUB)
+# =====================================================================
+
+def get_active_agent_slug() -> str:
+    """Retorna o slug do agente atualmente ativo no sistema (padrão: 'geral')."""
+    return get_setting("active_agent", "geral")
+
+def set_active_agent_slug(slug: str) -> bool:
+    """Define o agente ativo no sistema após verificar sua existência."""
+    clean_slug = slug.strip().lower()
+    agent_data = get_agent(clean_slug)
+    if not agent_data:
+        return False
+    return set_setting("active_agent", clean_slug)
+
+def get_agent(slug: str) -> Optional[Dict[str, Any]]:
+    """Busca um agente pelo seu identificador único (slug)."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, slug, name, icon, description, system_prompt, allowed_tools, is_default, created_at, updated_at
+                FROM agents
+                WHERE slug = %s
+            """, (slug.strip().lower(),))
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "slug": row[1],
+            "name": row[2],
+            "icon": row[3],
+            "description": row[4],
+            "system_prompt": row[5],
+            "allowed_tools": row[6],
+            "is_default": row[7],
+            "created_at": row[8],
+            "updated_at": row[9],
+        }
+    except Exception as e:
+        logging.error("Erro ao buscar agente '%s': %s", slug, e)
+        return None
+
+def list_agents() -> List[Dict[str, Any]]:
+    """Lista todos os agentes cadastrados, com os padrões e ativos primeiro."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, slug, name, icon, description, system_prompt, allowed_tools, is_default, created_at, updated_at
+                FROM agents
+                ORDER BY is_default DESC, name ASC
+            """)
+            rows = cur.fetchall()
+        conn.close()
+        agents = []
+        for row in rows:
+            agents.append({
+                "id": row[0],
+                "slug": row[1],
+                "name": row[2],
+                "icon": row[3],
+                "description": row[4],
+                "system_prompt": row[5],
+                "allowed_tools": row[6],
+                "is_default": row[7],
+                "created_at": row[8],
+                "updated_at": row[9],
+            })
+        return agents
+    except Exception as e:
+        logging.error("Erro ao listar agentes: %s", e)
+        return []
+
+def create_or_update_agent(
+    slug: str,
+    name: str,
+    icon: str = "🤖",
+    description: str = "",
+    system_prompt: str = "",
+    allowed_tools: Optional[List[str]] = None,
+    is_default: bool = False
+) -> bool:
+    """Cria ou atualiza as configurações e prompt de um agente."""
+    try:
+        clean_slug = slug.strip().lower()
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO agents (slug, name, icon, description, system_prompt, allowed_tools, is_default, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (slug) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    icon = EXCLUDED.icon,
+                    description = EXCLUDED.description,
+                    system_prompt = EXCLUDED.system_prompt,
+                    allowed_tools = EXCLUDED.allowed_tools,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (clean_slug, name.strip(), icon.strip(), description.strip(), system_prompt.strip(), allowed_tools, is_default))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logging.error("Erro ao criar/atualizar agente '%s': %s", slug, e)
+        return False
+
+def delete_agent(slug: str) -> bool:
+    """Exclui um agente personalizado (impede a exclusão de agentes padrão)."""
+    try:
+        clean_slug = slug.strip().lower()
+        agent_data = get_agent(clean_slug)
+        if not agent_data:
+            return False
+        if agent_data.get("is_default"):
+            return False  # Não permite deletar agentes do sistema
+            
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM agents WHERE slug = %s", (clean_slug,))
+        conn.commit()
+        conn.close()
+        
+        # Se o agente deletado era o ativo, reseta para 'geral'
+        if get_active_agent_slug() == clean_slug:
+            set_active_agent_slug("geral")
+        return True
+    except Exception as e:
+        logging.error("Erro ao deletar agente '%s': %s", slug, e)
+        return False
+
+def seed_default_agents():
+    """Garante a existência dos agentes padrão 'geral' e 'estudo' no banco."""
+    # 1. Agente Geral
+    if not get_agent("geral"):
+        create_or_update_agent(
+            slug="geral",
+            name="Assistente Geral & Financeiro",
+            icon="🤖",
+            description="Assistente pessoal multifuncional para gestão financeira, produtividade, notas e comandos de sistema.",
+            system_prompt="Você é o 'Meu Agente', um assistente virtual inteligente e proativo que roda no terminal Linux (WSL).\nVocê tem acesso a várias ferramentas para ajudar o usuário com finanças pessoais, produtividade e consultas gerais.",
+            allowed_tools=None,
+            is_default=True
+        )
+        
+    # 2. Agente de Estudos
+    if not get_agent("estudo"):
+        estudo_prompt = (
+            "Você é o 'Agente de Estudos & Aulas', um especialista pedagógico, acadêmico e didático de alto nível.\n"
+            "Sua missão principal é ajudar o usuário a:\n"
+            "1. ESTRUTURAÇÃO DE AULAS E PLANOS DE ENSINO:\n"
+            "   - Elaborar planos de aula completos e altamente estruturados (Tema, Carga Horária, Público-Alvo, Objetivos de Aprendizagem alinhados à Taxonomia de Bloom, Conteúdo Programático, Metodologias Ativas / Dinâmicas de Grupo, Recursos Didáticos, Atividades Práticas e Avaliações de Fixação).\n"
+            "   - Sugerir roteiros detalhados de slides, tópicos de apresentação e estudos de caso práticos (especialmente nas áreas de Engenharia Clínica, Tecnologia, Saúde, Programação e Gestão).\n"
+            "2. LEITURA E SÍNTESE ACADÊMICA DE ARTIGOS / LIVROS (PDF):\n"
+            "   - Ao receber ou analisar arquivos PDF com a ferramenta `pdf_tool`, extraia os pontos cruciais: Hipótese/Objetivo, Metodologia empregada, Resultados e Descobertas centrais, Limitações e Aplicações Práticas para sala de aula ou prática profissional.\n"
+            "3. CONVERSÃO PARA ÁUDIO (TEXT-TO-SPEECH):\n"
+            "   - Quando o usuário desejar ouvir resumos, aulas ou artigos, elabore um roteiro narrativo fluido e didático e use a ferramenta `tts_tool` para gerar o arquivo de áudio narrado com voz neural natural.\n"
+            "   - Após a execução da ferramenta `tts_tool`, NÃO chame a ferramenta novamente. Apresente o texto ao usuário em formato claro e amigável confirmando a síntese do áudio.\n"
+            "4. METODOLOGIA E DIDÁTICA:\n"
+            "   - Sempre incentive o aprendizado ativo, raciocínio crítico, conexões interdisciplinares e aplicação prática dos conceitos.\n"
+            "   - Utilize formatação Markdown rica, com tabelas, tópicos claros e destaques para facilitar a leitura e memorização."
+        )
+        create_or_update_agent(
+            slug="estudo",
+            name="Especialista em Estudos & Aulas",
+            icon="🎓",
+            description="Especialista pedagógico para estruturação de aulas, leitura analítica de artigos/PDFs, planos didáticos e roteiros de estudo.",
+            system_prompt=estudo_prompt,
+            allowed_tools=None,
+            is_default=True
+        )

@@ -36,7 +36,7 @@
       "function_name": "run"
     },
     "cron_tool": {
-      "prompt_instruction": "15. cron_tool (Gerenciar agendamentos de tarefas/cron jobs para subagentes em segundo plano. Sempre use esta ferramenta se o usuário pedir para agendar, programar, listar ou remover tarefas automatizadas/periódicas):\n{\n  \"tool\": \"cron_tool\",\n  \"args\": {\n    \"action\": \"add | list | delete\",\n    \"name\": \"Nome amigável da tarefa [obrigatório para action=add]\",\n    \"cron_expression\": \"Expressão cron ex: '*/5 * * * *' para cada 5 min [obrigatório para action=add]\",\n    \"task_prompt\": \"Instrução em linguagem natural que o subagente executará de tempos em tempos [obrigatório para action=add]\",\n    \"job_id\": 123  // ID da tarefa [obrigatório para action=delete]\n  }\n}",
+      "prompt_instruction": "15. cron_tool (Gerenciar agendamentos de tarefas/cron jobs para subagentes em segundo plano. Sempre use esta ferramenta se o usuário pedir para agendar, programar, listar ou remover tarefas automatizadas/periódicas):\n{\n  \"tool\": \"cron_tool\",\n  \"args\": {\n    \"action\": \"add | list | delete | update\",\n    \"name\": \"Nome amigável da tarefa [obrigatório para action=add]\",\n    \"cron_expression\": \"Expressão cron ex: '*/5 * * * *' para cada 5 min [obrigatório para action=add]\",\n    \"task_prompt\": \"Instrução em linguagem natural que o subagente executará de tempos em tempos [obrigatório para action=add]\",\n    \"job_id\": 123  // ID da tarefa [obrigatório para action=delete e update]\n  }\n}",
       "python_module": "meu_agente_cli.custom_tools.cron_tool",
       "function_name": "run"
     }

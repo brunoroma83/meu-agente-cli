@@ -11,24 +11,50 @@ CURRENT_DIR = Path(__file__).parent.resolve()
 # Timeout em segundos para chamadas de LLM (aumentado para processamento robusto de documentos e imagens)
 LLM_TIMEOUT = 300.0
 
-def build_system_prompt() -> str:
-    """Constrói dinamicamente o SYSTEM_PROMPT carregando dados dos arquivos de configuração JSON."""
+def build_system_prompt(agent_slug: Optional[str] = None) -> str:
+    """Constrói dinamicamente o SYSTEM_PROMPT carregando dados do agente ativo do banco e ferramentas."""
     try:
+        from meu_agente_cli import db
+
+        if not agent_slug:
+            agent_slug = db.get_active_agent_slug()
+
+        agent_data = db.get_agent(agent_slug)
+        if not agent_data:
+            agent_data = db.get_agent("geral")
+
         config_path = CURRENT_DIR / "system_prompt_config.json"
         with open(config_path, "r", encoding="utf-8") as f:
             config_data = json.load(f)
             
-        prefix = config_data.get("base_instruction_prefix", "")
         suffix = config_data.get("base_instruction_suffix", "")
         core_tools = config_data.get("core_tools", {})
         
-        # Junta todas as ferramentas nativas
-        prompt_parts = [prefix]
+        # 1. Identidade e Instruções do Agente Ativo
+        prompt_parts = []
+        if agent_data:
+            agent_header = (
+                f"=== IDENTIDADE DO AGENTE ATIVO: {agent_data['icon']} {agent_data['name']} (`{agent_data['slug']}`) ===\n"
+                f"{agent_data['system_prompt']}\n"
+                f"============================================================"
+            )
+            prompt_parts.append(agent_header)
+        else:
+            prefix = config_data.get("base_instruction_prefix", "")
+            prompt_parts.append(prefix)
+
+        prompt_parts.append("\nInstruções para chamadas de ferramentas:")
+        prompt_parts.append("Se o usuário solicitar informações que requerem uma ferramenta, responda EXCLUSIVAMENTE com um único bloco JSON correspondente, sem qualquer outro texto de conversa.\nFormatos de JSON aceitos:\n")
+
+        # 2. Filtragem de Ferramentas (se o agente possuir whitelist definida)
+        allowed = agent_data.get("allowed_tools") if agent_data else None
+        
         for tool_name, desc in core_tools.items():
-            prompt_parts.append(desc)
-            prompt_parts.append("") # Quebra de linha entre ferramentas
+            if allowed is None or tool_name in allowed:
+                prompt_parts.append(desc)
+                prompt_parts.append("") # Quebra de linha entre ferramentas
             
-        # Tenta carregar ferramentas customizadas dinâmicas do custom_tools.json
+        # 3. Ferramentas Customizadas Dinâmicas (custom_tools.json)
         custom_config_path = CURRENT_DIR / "custom_tools" / "custom_tools.json"
         if custom_config_path.exists():
             try:
@@ -36,16 +62,16 @@ def build_system_prompt() -> str:
                     custom_data = json.load(f_custom)
                 custom_tools = custom_data.get("tools", {})
                 for c_tool_name, c_tool_info in custom_tools.items():
-                    instruction = c_tool_info.get("prompt_instruction", "")
-                    if instruction:
-                        prompt_parts.append(instruction)
-                        prompt_parts.append("")
+                    if allowed is None or c_tool_name in allowed:
+                        instruction = c_tool_info.get("prompt_instruction", "")
+                        if instruction:
+                            prompt_parts.append(instruction)
+                            prompt_parts.append("")
             except Exception as ex:
                 print(f"[WARNING] Falha ao carregar ferramentas customizadas no prompt: {ex}")
 
-        # --- INSERE INFORMAÇÕES DE PERFIL DO USUÁRIO ---
+        # 4. Inserção de Informações de Perfil do Usuário
         try:
-            from meu_agente_cli import db
             logged_user = db.get_logged_in_user()
             if logged_user:
                 profile_data = db.get_user_profile(user_name=logged_user)
@@ -411,6 +437,24 @@ def parse_tool_call(response_text: str) -> Optional[Dict[str, Any]]:
                             # Normaliza quebras de linha e aspas
                             cmd_val = cmd_val.replace('\\n', '\n').replace('\\"', '"')
                             args["command"] = cmd_val
+                    elif tool_name == "tts_tool":
+                        text_match = re.search(r'"text"\s*:\s*"(.*)"', raw_json, re.DOTALL)
+                        if text_match:
+                            text_val = text_match.group(1).strip()
+                            for suffix in ['"} }', '"} \n}', '"}', '}']:
+                                if text_val.endswith(suffix):
+                                    text_val = text_val[:-len(suffix)].strip()
+                                    break
+                            if text_val.endswith('"') and not text_val.endswith('\\"'):
+                                text_val = text_val[:-1]
+                            text_val = text_val.replace('\\n', '\n').replace('\\"', '"')
+                            args["text"] = text_val
+                        voice_match = re.search(r'"voice"\s*:\s*"([^"]+)"', raw_json)
+                        if voice_match:
+                            args["voice"] = voice_match.group(1)
+                        title_match = re.search(r'"title"\s*:\s*"([^"]+)"', raw_json)
+                        if title_match:
+                            args["title"] = title_match.group(1)
                             
                     # Retorna se conseguiu achar a ferramenta e mapear
                     return {"tool": tool_name, "args": args}

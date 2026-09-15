@@ -13,8 +13,16 @@ import meu_agente_cli.tools as tools
 import meu_agente_cli.security as security
 
 def render_agent_response(content: str) -> Group:
-    """Combina o cabeçalho 'Agente IA: 🤖' em azul com o conteúdo em Markdown."""
-    prefix = Text("Agente IA: 🤖\n", style="bold blue")
+    """Combina o cabeçalho com nome e ícone do agente ativo com o conteúdo em Markdown."""
+    try:
+        active_slug = db.get_active_agent_slug()
+        agent_data = db.get_agent(active_slug)
+        if agent_data:
+            prefix = Text(f"{agent_data['name']}: {agent_data['icon']}\n", style="bold blue")
+        else:
+            prefix = Text("Agente IA: 🤖\n", style="bold blue")
+    except Exception:
+        prefix = Text("Agente IA: 🤖\n", style="bold blue")
     return Group(prefix, Markdown(content))
 
 def process_stream_speculative(stream_generator, console: Console):
@@ -129,6 +137,9 @@ def process_agent_turn(user_input: str, console: Console) -> None:
     messages.append({"role": "user", "content": user_input})
     
     max_turns = 5
+    executed_tools = []
+    executed_results = {}
+    executed_args = {}
     for turn in range(max_turns):
         # Exibe spinner discreto enquanto aguarda tokens iniciais
         with console.status("[bold blue]Pensando...", spinner="dots"):
@@ -160,20 +171,66 @@ def process_agent_turn(user_input: str, console: Console) -> None:
             
         tool_name = tool_call.get("tool")
         args = tool_call.get("args", {})
+
+        # Trava anti-loop: se a mesma ferramenta já foi executada neste turno
+        if tool_name in executed_tools and tool_name in ("tts_tool", "manage_agents_tool"):
+            last_res = executed_results.get(tool_name, "")
+            narrated = executed_args.get("tts_tool", {}).get("text", "") if tool_name == "tts_tool" else ""
+            if narrated:
+                final_text = f"🎙️ O áudio foi gerado com sucesso!\n\n**Texto narrado:**\n{narrated}\n\n{last_res}"
+            else:
+                final_text = f"🎙️ Tarefa de '{tool_name}' concluída com sucesso!\n\n{last_res}"
+            console.print(render_agent_response(final_text))
+            db.save_chat_message("user", user_input)
+            db.save_chat_message("assistant", final_text)
+            console.print()
+            check_and_trigger_memory_extraction()
+            break
+
+        if executed_tools.count(tool_name) >= 2:
+            last_res = executed_results.get(tool_name, "")
+            final_text = f"A ferramenta '{tool_name}' já foi executada.\n\n{last_res}"
+            console.print(render_agent_response(final_text))
+            db.save_chat_message("user", user_input)
+            db.save_chat_message("assistant", final_text)
+            console.print()
+            check_and_trigger_memory_extraction()
+            break
         
         # Exibe progresso da ferramenta
         console.print(f"\n[bold blue][Tool][/bold blue] Chamando: [yellow]{tool_name}[/yellow]...")
         
         # Executa a ferramenta
         tool_result = execute_tool_by_name(tool_name, args, console, allow_interactive=True)
+        executed_tools.append(tool_name)
+        executed_results[tool_name] = tool_result
+        executed_args[tool_name] = args
             
         console.print(f"[bold blue][Tool Resultado][/bold blue] Finalizado.")
         
-        # Alimenta o histórico do LLM para a próxima rodada
+        # Alimenta o histórico do LLM para a próxima rodada com instrução explícita
         messages.append({"role": "assistant", "content": response_text})
-        messages.append({"role": "user", "content": f"Resultado da ferramenta {tool_name}:\n{tool_result}"})
+        messages.append({
+            "role": "user",
+            "content": (
+                f"Resultado da ferramenta {tool_name}:\n{tool_result}\n\n"
+                f"[INSTRUÇÃO DO SISTEMA: A ferramenta '{tool_name}' já foi executada com sucesso e concluiu sua tarefa. "
+                f"NÃO gere blocos JSON e NÃO chame a ferramenta '{tool_name}' novamente. "
+                f"Agora formule e entregue sua resposta final ao usuário diretamente em texto formatado.]"
+            )
+        })
     else:
-        console.print("[red]Erro: Limite de iterações excedido pelo agente (loop de ferramentas).[/red]")
+        if "tts_tool" in executed_tools:
+            narrated = executed_args.get("tts_tool", {}).get("text", "")
+            if narrated:
+                fallback_msg = f"🎙️ O áudio foi gerado com sucesso!\n\n**Texto narrado:**\n{narrated}\n\n{executed_results.get('tts_tool', '')}"
+            else:
+                fallback_msg = f"🎙️ O áudio foi gerado com sucesso!\n\n{executed_results.get('tts_tool', '')}"
+            console.print(render_agent_response(fallback_msg))
+            db.save_chat_message("user", user_input)
+            db.save_chat_message("assistant", fallback_msg)
+        else:
+            console.print("[red]Erro: Limite de iterações excedido pelo agente (loop de ferramentas).[/red]")
 
 def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_interactive: bool = True) -> str:
     """Executa a ferramenta solicitada e retorna o resultado formatado em texto."""
@@ -213,6 +270,10 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
             return tools.profile_tool(**args)
         elif tool_name == "pdf_tool":
             return tools.pdf_tool(**args)
+        elif tool_name == "tts_tool":
+            return tools.tts_tool(**args)
+        elif tool_name == "manage_agents_tool":
+            return tools.manage_agents_tool(**args)
         else:
             # Tenta carregar a ferramenta dinamicamente do custom_tools.json
             from pathlib import Path
@@ -265,7 +326,10 @@ def process_agent_turn_silent(user_input: Any, use_sys_prompt: bool = True, use_
             messages.append({"role": sender, "content": msg})
     messages.append({"role": "user", "content": user_input})
     
-    max_turns = 15
+    max_turns = 10
+    executed_tools = []
+    executed_results = {}
+    executed_args = {}
     for turn in range(max_turns):
         # Conversa síncrona com o LLM (sem streaming)
         response_text = llm.chat_completion(model, messages, stream=False)
@@ -280,14 +344,57 @@ def process_agent_turn_silent(user_input: Any, use_sys_prompt: bool = True, use_
             
         tool_name = tool_call.get("tool")
         args = tool_call.get("args", {})
+
+        # Trava anti-loop: se a mesma ferramenta já foi executada neste turno
+        if tool_name in executed_tools and tool_name in ("tts_tool", "manage_agents_tool"):
+            last_res = executed_results.get(tool_name, "")
+            narrated = executed_args.get("tts_tool", {}).get("text", "") if tool_name == "tts_tool" else ""
+            if narrated:
+                final_msg = f"🎙️ O áudio foi gerado com sucesso!\n\n**Texto narrado:**\n{narrated}\n\n{last_res}"
+            else:
+                final_msg = f"🎙️ Tarefa de '{tool_name}' concluída com sucesso!\n\n{last_res}"
+            db.save_chat_message("user", user_input)
+            db.save_chat_message("assistant", final_msg)
+            check_and_trigger_memory_extraction()
+            return final_msg
+
+        if executed_tools.count(tool_name) >= 2:
+            last_res = executed_results.get(tool_name, "")
+            final_msg = f"A ferramenta '{tool_name}' já foi executada.\n\nResultado:\n{last_res}"
+            db.save_chat_message("user", user_input)
+            db.save_chat_message("assistant", final_msg)
+            check_and_trigger_memory_extraction()
+            return final_msg
         
         # Executa a ferramenta de forma não-interativa (allow_interactive=False)
         tool_result = execute_tool_by_name(tool_name, args, silent_console, allow_interactive=False)
+        executed_tools.append(tool_name)
+        executed_results[tool_name] = tool_result
+        executed_args[tool_name] = args
         
         # Alimenta o contexto com a execução e o resultado para a próxima iteração do modelo
         messages.append({"role": "assistant", "content": response_text})
-        messages.append({"role": "user", "content": f"Resultado da ferramenta {tool_name}:\n{tool_result}"})
+        messages.append({
+            "role": "user",
+            "content": (
+                f"Resultado da ferramenta {tool_name}:\n{tool_result}\n\n"
+                f"[INSTRUÇÃO DO SISTEMA: A ferramenta '{tool_name}' já foi executada com sucesso e concluiu sua tarefa. "
+                f"NÃO gere blocos JSON e NÃO chame a ferramenta '{tool_name}' novamente. "
+                f"Agora formule e entregue sua resposta final ao usuário diretamente em texto formatado.]"
+            )
+        })
         
+    if "tts_tool" in executed_tools:
+        narrated = executed_args.get("tts_tool", {}).get("text", "")
+        if narrated:
+            final_msg = f"🎙️ O áudio foi gerado com sucesso!\n\n**Texto narrado:**\n{narrated}\n\n{executed_results.get('tts_tool', '')}"
+        else:
+            final_msg = f"🎙️ O áudio foi gerado com sucesso!\n\n{executed_results.get('tts_tool', '')}"
+        db.save_chat_message("user", user_input)
+        db.save_chat_message("assistant", final_msg)
+        check_and_trigger_memory_extraction()
+        return final_msg
+
     return "Erro: O agente excedeu o limite de pensamentos (loop de ferramentas)."
 
 def run_silent_memory_extraction(user_name: str) -> None:

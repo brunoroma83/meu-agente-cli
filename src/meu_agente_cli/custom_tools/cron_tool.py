@@ -1,6 +1,7 @@
 from typing import Optional
 from croniter import croniter
 import meu_agente_cli.db as db
+import logging
 
 def run(**kwargs) -> str:
     """
@@ -64,5 +65,21 @@ def run(**kwargs) -> str:
         else:
             return f"Erro: Não foi possível remover o cronjob #{job_id_int}."
             
+    elif action == "update":
+        job_id = kwargs.get("job_id")
+        name = kwargs.get("name")
+        cron_expression = kwargs.get("cron_expression")
+        task_prompt = kwargs.get("task_prompt")
+        
+        if not job_id:
+            logging.error("Erro: 'job_id' é obrigatório para a ação 'update'.")
+            return "Erro: 'job_id' é obrigatório para a ação 'update'."
+        
+        if db.update_cron_job(job_id, name, cron_expression, task_prompt):
+            logging.info(f"Sucesso: Cronjob #{job_id} atualizado com sucesso.")
+            return f"Sucesso: Cronjob #{job_id} atualizado com sucesso."
+        else:
+            logging.error(f"Erro: Não foi possível atualizar o cronjob #{job_id}.")
+            return f"Erro: Não foi possível atualizar o cronjob #{job_id}."
     else:
         return f"Erro: Ação '{action}' desconhecida. Use 'add', 'list' ou 'delete'."
