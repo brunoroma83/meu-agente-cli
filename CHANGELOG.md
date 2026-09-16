@@ -9,6 +9,8 @@ O formato é baseado no [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 ## [Unreleased]
 
 ### Added
+- **Interceptação Inteligente de Lançamentos Financeiros por Texto (Telegram)**: Mensagens de texto no Telegram agora são analisadas proativamente com `parse_financial_intent` antes de chegarem ao LLM livre. Quando o usuário envia instruções de registro de gastos ou receitas (inclusive com cartões de crédito e typos cotidianos), o bot apresenta imediatamente um card visual de confirmação com botões inline interativos (`[✅ Confirmar Lançamento]` e `[❌ Cancelar]`), garantindo que nenhum gasto seja perdido ou simulado. Perguntas e consultas financeiras normais (ex: *"quanto gastei este mês?"*, *"qual meu saldo?"*) continuam fluindo diretamente para o assistente responder.
+- **Suporte Nativo a Cartão de Crédito na `finance_tool`**: A ferramenta central de finanças do agente (`finance_tool`) agora suporta nativamente compras no cartão de crédito via ação `card_buy` ou através do parâmetro `card_name` em `add_despesa`. A integração conecta-se diretamente a `db.add_card_purchase`, calculando automaticamente dia de fechamento, vencimento da fatura e desdobramento de parcelas futuras.
 - **Reestruturação Dual-Track de Investimentos (Renda Fixa e Ações)**: Transição da arquitetura de investimentos de tabela única para modelo transacional com extratos de movimentações dedicados (`movimentacao_renda_fixa` e `movimentacao_acoes`) e posições consolidadas em tempo real:
   - **Ações**: Rastreamento completo de ordens (`COMPRA`, `VENDA`, `DESDOBRAMENTO`), cálculo exato de Preço Médio (PM) ponderado com taxas, apuração de Lucro Realizado acumulado em vendas, integração com `yfinance` para cotações de mercado automáticas e apuração de Lucro/Prejuízo não realizado.
   - **Renda Fixa**: Histórico de eventos (`APORTE`, `RESGATE`, `JUROS_RECEBIDOS`, `IMPOSTO`), cálculo de saldo líquido investido, rendimento acumulado e sincronização de valores de mercado com o cadastro mestre de títulos (`investimentos`).
@@ -58,6 +60,9 @@ O formato é baseado no [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - **Filtro Padrão do `/finance`**: O comando sem argumentos agora assume o mês corrente por padrão (ex: `mes=08-2026`).
 - **Resiliência do Parser de Ferramentas**: Modificado o interpretador de fluxo para ser tolerante a respostas conversacionais da LLM que antecedam o bloco de código JSON. Adicionado também um parser de **fallback robusto com expressões regulares** que repara e extrai chamadas de comandos mesmo se a LLM gerar JSON malformado contendo aspas não escapadas ou quebras de linha cruas em scripts.
 - **Otimização de Conexão e Codificação**: Tratamento para codepoints de caracteres `surrogate` inválidos vindos de inputs ou outputs no WSL, prevenindo quebras em payloads JSON ou SQL.
+
+### Fixed
+- **Prevenção de Alucinação e Simulação de Despesas pelo LLM**: Correção do comportamento em que o modelo respondia com mensagens de confirmação simuladas (ex: *"✅ Despesa gravada!"*) sem disparar a ferramenta `finance_tool`, decorrente do viés de aprendizado por histórico conversacional (*in-context hallucination*). Foram adicionadas regras imperativas no `system_prompt_config.json` e na `TELEGRAM_INSTRUCTION` proibindo respostas em texto sem confirmação real da ferramenta, além de aprimoramentos no `parse_financial_intent` com filtros anti-falsos positivos para perguntas e suporte a variações cotidianas de digitação (ex: *"gostei"*).
 
 ### Security
 - **Proteção Anteadulteração de Whitelist**: A whitelist de comandos é apenas para leitura da IA. Qualquer modificação externa sem a devida chave privada (senha do usuário) invalida a assinatura e bloqueia o carregamento de novos comandos CLI.

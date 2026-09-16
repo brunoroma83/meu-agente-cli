@@ -2300,59 +2300,53 @@ def delete_user_profile(category: str, user_name: str = "default") -> bool:
         return False
 
 def login_user(user_name: str) -> bool:
-    """Registra o login do usuário com validade de 24 horas."""
+    """Define o usuário ativo no sistema."""
     try:
-        # Garante que o usuário exista
-        get_or_create_user(user_name)
-        
-        # Define expiração para 24 horas a partir de agora
-        expires_at = time.time() + (24 * 3600)
-        
-        set_setting("logged_in_user", user_name)
-        set_setting("login_expires_at", str(expires_at))
-        return True
-    except Exception as e:
-        print(f"[ERROR] Erro ao realizar login do usuário '{user_name}': {e}", file=sys.stderr)
-        return False
-
-def logout_user() -> bool:
-    """Remove a sessão do usuário logado do sistema."""
-    try:
-        set_setting("logged_in_user", "")
+        clean_name = clean_string(user_name).strip()
+        if not clean_name:
+            return False
+        get_or_create_user(clean_name)
+        set_setting("logged_in_user", clean_name)
         set_setting("login_expires_at", "")
         return True
     except Exception as e:
-        print(f"[ERROR] Erro ao realizar logout: {e}", file=sys.stderr)
+        print(f"[ERROR] Erro ao definir usuário ativo '{user_name}': {e}", file=sys.stderr)
         return False
 
-def get_logged_in_user() -> Optional[str]:
-    """Retorna o nome do usuário logado se a sessão for válida, senão expira a sessão e retorna None."""
+def logout_user() -> bool:
+    """Redefine o usuário ativo para o padrão ('default')."""
     try:
+        set_setting("logged_in_user", "default")
+        set_setting("login_expires_at", "")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Erro ao redefinir usuário: {e}", file=sys.stderr)
+        return False
+
+def get_logged_in_user() -> str:
+    """Retorna o nome do usuário ativo (env DEFAULT_USER, setting ou 'default' como fallback)."""
+    try:
+        import os
+        env_user = os.getenv("DEFAULT_USER")
+        if env_user and env_user.strip():
+            user = clean_string(env_user).strip()
+            get_or_create_user(user)
+            return user
+
         user = get_setting("logged_in_user")
-        expires_at_str = get_setting("login_expires_at")
-        
-        if not user or not expires_at_str:
-            return None
-            
-        try:
-            expires_at = float(expires_at_str)
-        except ValueError:
-            logout_user()
-            return None
-            
-        # Verifica expiração
-        if time.time() > expires_at:
-            logout_user()
-            return None
-            
-        return user
+        if user and user.strip():
+            clean_u = clean_string(user).strip()
+            get_or_create_user(clean_u)
+            return clean_u
+
+        get_or_create_user("default")
+        return "default"
     except Exception:
-        return None
+        return "default"
 
 def get_active_username() -> str:
-    """Retorna o usuário atualmente logado ou 'default' como fallback."""
-    logged_user = get_logged_in_user()
-    return logged_user if logged_user else "default"
+    """Retorna o usuário atualmente ativo no sistema."""
+    return get_logged_in_user()
 
 # =====================================================================
 # GERENCIAMENTO DE AGENTES (AGENT HUB)

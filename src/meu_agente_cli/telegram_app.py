@@ -41,6 +41,8 @@ def format_finance_card_preview(data: dict, doc_type: str = "Voz", original_text
     category = data.get("category", "Outros")
     desc = data.get("description", "Sem descrição")
     due_date = data.get("due_date", datetime.now().strftime("%Y-%m-%d"))
+    card_name = data.get("card_name")
+    installments = int(data.get("installments", 1) or 1)
     
     try:
         due_display = datetime.strptime(due_date, "%Y-%m-%d").strftime("%d/%m/%Y")
@@ -52,9 +54,15 @@ def format_finance_card_preview(data: dict, doc_type: str = "Voz", original_text
         f"• *Tipo:* {icon} {r_type}",
         f"• *Categoria:* {category}",
         f"• *Valor:* `R$ {amount:.2f}`",
+    ]
+    if card_name:
+        card_str = f"💳 {card_name} ({installments}x)" if installments > 1 else f"💳 {card_name} (à vista)"
+        lines.append(f"• *Cartão:* {card_str}")
+        
+    lines.extend([
         f"• *Descrição:* {desc}",
         f"• *Data/Vencimento:* {due_display}\n"
-    ]
+    ])
     if original_text:
         text_escaped = escape_markdown(original_text[:120])
         lines.append(f"_\"{text_escaped}\"_\n")
@@ -95,14 +103,20 @@ def sanitize_financial_due_date(raw_due_date: Optional[str]) -> str:
 def parse_financial_intent(text: str) -> dict:
     """Analisa se o texto descreve uma transação financeira e extrai seus campos estruturados."""
     keywords = [
-        "gastei", "gasto", "comprei", "compra", "compras", "paguei", "pago", "pagamento",
+        "gastei", "gasto", "gostei", "comprei", "compra", "compras", "paguei", "pago", "pagamento",
         "recebi", "recebimento", "salario", "salário", "pix", "fatura", "boleto", "cartão",
-        "cartao", "reais", "r$", "custou", "despesa", "receita"
+        "cartao", "reais", "r$", "custou", "despesa", "receita", "lançar", "lancar", "registre", "registrar"
     ]
     text_lower = text.lower()
     has_keywords = any(w in text_lower for w in keywords)
     has_number = bool(re.search(r'\d+', text))
     if not (has_keywords and has_number):
+        return None
+
+    # Evita interceptar simples perguntas e consultas (ex: "quanto gastei?", "ver extrato")
+    query_words = ["quanto", "qual", "quais", "ver ", "mostrar", "extrato", "resumo", "total", "saldo", "listar", "relatorio", "relatório"]
+    action_words = ["lançar", "lancar", "registre", "registrar", "anote", "anotar", "adicione", "adicionar", "salvar", "salve", "insere", "inserir"]
+    if any(qw in text_lower for qw in query_words) and not any(aw in text_lower for aw in action_words):
         return None
         
     today_iso = datetime.now().strftime("%Y-%m-%d")
@@ -111,19 +125,21 @@ def parse_financial_intent(text: str) -> dict:
         model = db.get_setting("active_model", "google/gemma-4-31b-qat")
         prompt = (
             "Você é um classificador e extrator financeiro rigoroso.\n"
-            "Analise a seguinte fala/transcrição:\n"
+            "Analise a seguinte fala/transcrição/mensagem:\n"
             f"\"{text}\"\n\n"
-            "Se o texto descrever uma transação financeira (despesa ou receita realizada ou futura), responda ESTRITAMENTE com o seguinte JSON:\n"
+            "Se o texto descrever uma transação financeira (despesa, compra ou receita realizada ou futura), responda ESTRITAMENTE com o seguinte JSON:\n"
             "{\n"
             '  "is_financial": true,\n'
             '  "type": "despesa" ou "receita",\n'
             '  "category": "Alimentação | Supermercado | Transporte | Farmácia | Saúde | Moradia | Lazer | Educação | Salário | Outros",\n'
             '  "amount": 0.00,\n'
             '  "description": "descrição curta do gasto/receita",\n'
-            f'  "due_date": "{today_iso}" // Data informada ou hoje\n'
+            f'  "due_date": "{today_iso}", // Data informada ou hoje\n'
+            '  "card_name": "Nome do cartão mencionado (ex: BB, Nubank, Itaú, Porto-Seguro) ou null",\n'
+            '  "installments": 1 // Número de parcelas se informado ou 1\n'
             "}\n\n"
             "IMPORTANTE: No Brasil as datas são DD/MM/AAAA. Se o usuário disser 'dia 02/09' ou '2 de setembro', o formato ISO YYYY-MM-DD é 2026-09-02.\n\n"
-            "Se NÃO for uma transação financeira (ex: ata de reunião, dúvida técnica, conversa cotidiana), responda:\n"
+            "Se NÃO for um lançamento de transação financeira (ex: consulta de extrato, pergunta, ata de reunião, conversa cotidiana), responda:\n"
             '{"is_financial": false}\n\n'
             "Responda SOMENTE o bloco JSON, sem markdown ou explicações."
         )
@@ -137,6 +153,15 @@ def parse_financial_intent(text: str) -> dict:
                 data["type"] = "receita" if "receita" in r_type else "despesa"
                 data["amount"] = float(data.get("amount", 0))
                 data["due_date"] = sanitize_financial_due_date(data.get("due_date"))
+                card_val = data.get("card_name")
+                if card_val and str(card_val).lower() not in ("null", "none", ""):
+                    data["card_name"] = str(card_val).strip()
+                else:
+                    data["card_name"] = None
+                try:
+                    data["installments"] = max(1, int(data.get("installments", 1) or 1))
+                except Exception:
+                    data["installments"] = 1
                 return data
     except Exception as e:
         print(f"[Warning] Falha ao extrair intenção financeira via LLM: {e}")
@@ -150,7 +175,7 @@ def parse_financial_intent(text: str) -> dict:
             if amount > 0:
                 r_type = "receita" if any(w in text_lower for w in ["recebi", "receita", "salario", "salário", "ganhei"]) else "despesa"
                 category = "Outros"
-                if any(w in text_lower for w in ["almoço", "almoco", "jantar", "lanche", "restaurante", "pizza", "comida", "padaria"]):
+                if any(w in text_lower for w in ["almoço", "almoco", "jantar", "lanche", "restaurante", "pizza", "comida", "padaria", "doce", "doces", "sorvete", "sorvetes"]):
                     category = "Alimentação"
                 elif any(w in text_lower for w in ["mercado", "supermercado", "compras"]):
                     category = "Supermercado"
@@ -158,16 +183,35 @@ def parse_financial_intent(text: str) -> dict:
                     category = "Transporte"
                 elif any(w in text_lower for w in ["remedio", "remédio", "farmacia", "farmácia", "medico", "médico"]):
                     category = "Farmácia"
-                elif any(w in text_lower for w in ["aluguel", "condominio", "condomínio", "luz", "energia", "agua", "água", "internet"]):
+                elif any(w in text_lower for w in ["aluguel", "condominio", "condomínio", "luz", "energia", "agua", "água", "internet", "domínio", "dominio"]):
                     category = "Moradia"
                     
+                # Detecção de cartão na heurística fallback
+                cards_dict = {
+                    "bb": "BB", "banco do brasil": "BB", 
+                    "nubank": "Nubank", "nu": "Nubank", 
+                    "itau": "Itaú", "itaú": "Itaú", 
+                    "porto": "Porto-Seguro", "porto seguro": "Porto-Seguro", 
+                    "bradesco": "Bradesco", "inter": "Inter"
+                }
+                detected_card = None
+                if "cartão" in text_lower or "cartao" in text_lower or "credito" in text_lower or "crédito" in text_lower:
+                    for c_key, c_val in cards_dict.items():
+                        if c_key in text_lower:
+                            detected_card = c_val
+                            break
+                inst_match = re.search(r'(\d+)\s*(?:x|vezes|parcelas)', text_lower)
+                installments = int(inst_match.group(1)) if inst_match else 1
+
                 return {
                     "is_financial": True,
                     "type": r_type,
                     "category": category,
                     "amount": amount,
                     "description": text[:80],
-                    "due_date": today_iso
+                    "due_date": today_iso,
+                    "card_name": detected_card,
+                    "installments": installments
                 }
     except Exception:
         pass
@@ -179,7 +223,8 @@ TELEGRAM_INSTRUCTION = (
     "ao usuário em texto, formate com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII "
     "ou caixas unicode complexas. Se você precisar acionar uma ferramenta (como tts_tool, finance_tool, etc.), "
     "responda EXCLUSIVAMENTE com o bloco JSON da ferramenta, sem texto adicional de conversa. "
-    "NUNCA simule em texto mensagens que afirmam que um áudio foi gerado sem ter acionado o JSON da tts_tool!]"
+    "NUNCA simule em texto mensagens que afirmam que um áudio foi gerado sem ter acionado o JSON da tts_tool! "
+    "NUNCA simule ou responda em texto que uma despesa, receita ou compra em cartão foi gravada/registrada sem ter acionado o JSON da finance_tool e recebido o retorno [SUCCESS]!]"
 )
 
 
@@ -190,12 +235,8 @@ def is_authorized(message) -> bool:
         return False
     return message.chat.id in authorized_ids
 
-def is_logged_in(message) -> bool:
-    """Verifica se há um usuário logado e ativo no banco."""
-    logged_user = db.get_logged_in_user()
-    if not logged_user:
-        bot.reply_to(message, "⚠️ Acesso negado. Nenhum usuário logado. Por favor, faça login usando `/login <nome_usuario>`.")
-        return False
+def is_logged_in(message=None) -> bool:
+    """Compatibilidade: autenticação gerida por Chat ID e usuário padrão."""
     return True
 
 def strip_ansi(text: str) -> str:
@@ -208,8 +249,6 @@ def format_help_telegram() -> str:
         "🛡️ *Meu Agente CLI - Comandos Disponíveis:*\n\n"
         "• `/help` - Mostra esta lista de ajuda.\n"
         "• `/agent` - Gerencia e alterna agentes especialistas (ex: `/agent estudo`, `/agent geral`).\n"
-        "• `/login <nome_usuario>` - Inicia uma sessão de login (válida por 24h).\n"
-        "• `/logout` - Encerra a sessão ativa.\n"
         "• `/status` - Mostra conexões e estado atual de segurança.\n"
         "• `/clear` - Limpa o histórico de conversa com o agente.\n"
         "• `/history <limite>` - Exibe ou altera o tamanho do histórico.\n"
@@ -472,11 +511,6 @@ def handle_incoming_message(message):
         parts = text.split()
         cmd = parts[0].lower()
         
-        # Comandos permitidos sem login ativo
-        if cmd not in ("/login", "/help", "/start"):
-            if not is_logged_in(message):
-                return
-                
         bot.send_chat_action(message.chat.id, 'typing')
         
         # Filtros e roteamentos personalizados para exibir layouts bonitos no celular
@@ -545,10 +579,21 @@ def handle_incoming_message(message):
             
     else:
         # Conversa normal com o Agente (Pensamento + Execução Silenciosa de Ferramentas)
-        if not is_logged_in(message):
-            return
-            
         bot.send_chat_action(message.chat.id, 'typing')
+        
+        # Interceptação proativa de lançamentos financeiros em mensagens de texto
+        fin_data = parse_financial_intent(text)
+        if fin_data:
+            pending_finance_entries[message.chat.id] = fin_data
+            markup = InlineKeyboardMarkup()
+            btn_confirm = InlineKeyboardButton("✅ Confirmar Lançamento", callback_data="finance_confirm:confirm")
+            btn_cancel = InlineKeyboardButton("❌ Cancelar", callback_data="finance_confirm:cancel")
+            markup.row(btn_confirm, btn_cancel)
+            
+            card_text = format_finance_card_preview(fin_data, doc_type="Texto", original_text=text)
+            bot.reply_to(message, card_text, reply_markup=markup, parse_mode="Markdown")
+            return
+
         try:
             telegram_prompt = f"{text}{TELEGRAM_INSTRUCTION}"
             response = agent.process_agent_turn_silent(telegram_prompt)
@@ -1073,9 +1118,6 @@ def handle_audio_upload(message):
         bot.reply_to(message, "Acesso negado. Este bot do agente é privado.")
         return
 
-    if not is_logged_in(message):
-        return
-
     bot.send_chat_action(message.chat.id, 'record_audio')
     
     try:
@@ -1320,8 +1362,21 @@ def handle_finance_confirmation(call):
         amount = float(data.get("amount", 0.0))
         description = data.get("description", "")
         due_date = data.get("due_date")
+        card_name = data.get("card_name")
+        installments = int(data.get("installments", 1) or 1)
         
-        success = db.add_financial_record(r_type, category, amount, description, due_date)
+        if card_name:
+            success = db.add_card_purchase(
+                card_name=card_name,
+                category=category,
+                total_amount=amount,
+                installments=installments,
+                description=description,
+                buy_date_str=due_date
+            )
+        else:
+            success = db.add_financial_record(r_type, category, amount, description, due_date)
+
         bot.answer_callback_query(call.id, "Lançamento registrado com sucesso!")
         if success:
             due_display = due_date
@@ -1332,11 +1387,12 @@ def handle_finance_confirmation(call):
                 pass
                 
             icon = "🔴" if r_type.lower() == "despesa" else "🟢"
+            card_extra = f"\n• *Cartão:* 💳 {card_name} ({installments}x)" if (card_name and installments > 1) else (f"\n• *Cartão:* 💳 {card_name} (à vista)" if card_name else "")
             msg = (
                 f"✅ *Lançamento Financeiro Registrado com Sucesso!*\n\n"
                 f"• *Tipo:* {icon} {r_type.capitalize()}\n"
                 f"• *Categoria:* {category}\n"
-                f"• *Valor:* `R$ {amount:.2f}`\n"
+                f"• *Valor:* `R$ {amount:.2f}`{card_extra}\n"
                 f"• *Descrição:* {description or 'N/A'}\n"
                 f"• *Data/Vencimento:* {due_display or 'Hoje'}"
             )
@@ -1394,9 +1450,6 @@ def handle_document_upload(message):
     if not is_authorized(message):
         print(f"[BLOQUEADO] Documento recebido de Chat ID não autorizado: {message.chat.id}")
         bot.reply_to(message, "Acesso negado. Este bot do agente é privado.")
-        return
-
-    if not is_logged_in(message):
         return
 
     bot.send_chat_action(message.chat.id, 'typing')
@@ -1508,9 +1561,6 @@ def handle_photo_upload(message):
     if not is_authorized(message):
         print(f"[BLOQUEADO] Imagem recebida de Chat ID não autorizado: {message.chat.id}")
         bot.reply_to(message, "Acesso negado. Este bot do agente é privado.")
-        return
-
-    if not is_logged_in(message):
         return
 
     bot.send_chat_action(message.chat.id, 'typing')

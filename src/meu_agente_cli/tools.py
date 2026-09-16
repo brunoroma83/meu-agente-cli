@@ -224,6 +224,35 @@ def finance_tool(
         else:
             return "Erro: Parâmetro 'record_id' ou 'record_ids' é obrigatório para a ação 'delete'."
             
+    card_name = kwargs.get("card_name") or kwargs.get("cartao") or kwargs.get("card")
+    installments = kwargs.get("installments") or kwargs.get("parcelas") or 1
+    buy_date_str = due_date or kwargs.get("buy_date") or kwargs.get("data")
+
+    if act in ("card_buy", "buy_card", "add_card_purchase") or (act == "add_despesa" and card_name):
+        if not card_name:
+            return "Erro: Nome do cartão ('card_name') é obrigatório para registrar compra no cartão."
+        if not category:
+            category = "Outros"
+        if amount <= 0:
+            return "Erro: Valor deve ser maior que zero."
+        try:
+            installments = int(installments)
+        except (ValueError, TypeError):
+            installments = 1
+        success = db.add_card_purchase(
+            card_name=str(card_name).strip(),
+            category=category,
+            total_amount=amount,
+            installments=installments,
+            description=description,
+            buy_date_str=buy_date_str
+        )
+        if success:
+            parcelas_info = f" em {installments}x" if installments > 1 else " à vista"
+            return f"[SUCCESS] Compra no cartão '{card_name}' registrada: R$ {amount:.2f}{parcelas_info} na categoria '{category}' ({description or 'Sem descrição'})."
+        else:
+            return f"[ERROR] Falha ao registrar compra no cartão '{card_name}' no banco de dados."
+
     elif act in ("add_receita", "add_despesa"):
         record_type = "receita" if "receita" in act else "despesa"
         if not category:

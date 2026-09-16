@@ -724,33 +724,10 @@ def handle_slash_command(cmd_input: str) -> bool:
     parts = cmd_input.split()
     command = parts[0].lower()
     
-    # Comandos permitidos sem login ativo
-    if command not in ("/login", "/help", "/exit", "/quit"):
-        logged_user = db.get_logged_in_user()
-        if not logged_user:
-            console.print("[bold red]Acesso negado.[/bold red] Nenhum usuário logado. Por favor, faça login com [green]/login [nome_usuario][/green]")
-            return True
-            
     if command in ("/exit", "/quit"):
         console.print("[bold yellow]Parando subagentes e encerrando o Meu Agente CLI. Até mais![/bold yellow]")
         scheduler.stop_scheduler()
         return False
-        
-    elif command == "/login":
-        if len(parts) > 1:
-            user_name = parts[1]
-            if db.login_user(user_name):
-                console.print(f"[bold green][LOGIN SUCESSO][/bold green] Usuário [yellow]{user_name}[/yellow] logado com sucesso! Válido por 24 horas.")
-            else:
-                console.print("[bold red]Erro ao realizar login.[/bold red]")
-        else:
-            console.print("[red]Uso correto: /login <nome_usuario>[/red]")
-            
-    elif command == "/logout":
-        if db.logout_user():
-            console.print("[bold green][LOGOUT][/bold green] Usuário deslogado com sucesso.")
-        else:
-            console.print("[bold red]Erro ao realizar logout.[/bold red]")
 
     elif command == "/agent":
         handle_agent_command(parts, console)
@@ -760,8 +737,6 @@ def handle_slash_command(cmd_input: str) -> bool:
             "[bold cyan]Comandos Disponíveis:[/bold cyan]\n"
             "- [green]/help[/green]: Mostra esta lista de ajuda.\n"
             "- [green]/agent[/green]: Gerencia agentes especialistas. Opções: [green]/agent[/green] (listar), [green]/agent use <slug>[/green] (alternar), [green]/agent info <slug>[/green], [green]/agent create[/green], [green]/agent improve <slug> <instrução>[/green], [green]/agent delete <slug>[/green].\n"
-            "- [green]/login <nome_usuario>[/green]: Inicia uma sessão de login válida por 24 horas.\n"
-            "- [green]/logout[/green]: Encerra a sessão ativa do usuário.\n"
             "- [green]/status[/green]: Mostra conexões e estado atual de segurança.\n"
             "- [green]/clear[/green]: Limpa o histórico de conversa (reseta o contexto do agente).\n"
             "- [green]/history <limite>[/green]: Exibe ou altera a quantidade de mensagens enviadas no histórico (contexto recente) ao LLM.\n"
@@ -1364,12 +1339,6 @@ def main():
                 if not should_continue:
                     break
             else:
-                # Verifica se há usuário logado
-                logged_user = db.get_logged_in_user()
-                if not logged_user:
-                    console.print("[bold red]Acesso negado.[/bold red] Nenhum usuário logado. Faça login usando [green]/login [nome_usuario][/green]")
-                    continue
-                
                 # Turno normal de conversa com o agente
                 agent.process_agent_turn(user_input, console)
                 
