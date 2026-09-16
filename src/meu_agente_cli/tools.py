@@ -869,3 +869,38 @@ def manage_agents_tool(
 
     return f"[ERRO] Ação '{action}' desconhecida para manage_agents_tool. Use: list | get_info | create | improve | delete."
 
+def transcribe_audio_tool(file_path: str, context_length: Optional[int] = 2500) -> str:
+    """
+    Ferramenta de transcrição de áudio (PT-BR).
+    Transcreve arquivos de áudio (M4A, MP3, WAV, etc.), salva a transcrição
+    completa em um arquivo .txt e retorna o texto limitado ao context_length.
+    """
+    from pathlib import Path
+    from meu_agente_cli.speech_to_text import transcrever_arquivo_audio
+    
+    p = Path(file_path)
+    if not p.exists():
+        return f"[ERRO] Arquivo de áudio não encontrado: {file_path}"
+        
+    transcription = transcrever_arquivo_audio(str(p))
+    if not transcription or not transcription.strip():
+        return "[AVISO] Não foi possível extrair falas audíveis do arquivo."
+
+    # Salva a transcrição completa em arquivo texto (.txt)
+    output_txt = p.parent / f"{p.stem}_transcricao.txt"
+    try:
+        with open(output_txt, "w", encoding="utf-8") as f:
+            f.write(transcription)
+    except Exception as e:
+        return f"[ERRO] Falha ao salvar transcrição em arquivo texto: {e}"
+
+    # Limita o retorno conforme o tamanho de contexto definido
+    retorno_texto = transcription
+    if context_length and len(transcription) > context_length:
+        retorno_texto = transcription[:context_length] + f"\n\n... [Texto truncado para caber no contexto. Transcrição completa em: {output_txt}]"
+
+    return (
+        f"[SUCCESS] Áudio transcrito com sucesso!\n"
+        f"📄 Arquivo salvo: {output_txt}\n\n"
+        f"Transcrição:\n{retorno_texto}"
+    )

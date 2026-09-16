@@ -274,6 +274,8 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
             return tools.tts_tool(**args)
         elif tool_name == "manage_agents_tool":
             return tools.manage_agents_tool(**args)
+        elif tool_name == "transcribe_audio_tool":
+            return tools.transcribe_audio_tool(**args)
         else:
             # Tenta carregar a ferramenta dinamicamente do custom_tools.json
             from pathlib import Path
