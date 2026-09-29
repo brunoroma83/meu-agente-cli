@@ -2647,16 +2647,42 @@ def save_mcp_server(name: str, url: str, api_key: Optional[str] = None, transpor
         return False
 
 def get_mcp_server(name: str) -> Optional[Dict[str, Any]]:
-    """Busca os dados de um servidor MCP pelo nome."""
+    """Busca os dados de um servidor MCP pelo nome ou alias flexível."""
+    if not name:
+        return None
     try:
+        clean_name = name.strip().lower()
         conn = get_connection()
         with conn.cursor() as cur:
+            # 1. Busca exata por nome
             cur.execute("""
                 SELECT id, name, url, api_key, transport, headers, is_active, created_at, updated_at
                 FROM mcp_servers
-                WHERE LOWER(name) = LOWER(%s)
-            """, (name.strip(),))
+                WHERE LOWER(name) = %s
+            """, (clean_name,))
             row = cur.fetchone()
+            
+            # 2. Busca flexível: se não encontrou, busca por variações (ex: flowcrm, flow_crm, crm)
+            if not row:
+                simplified = clean_name.replace("_", "").replace("-", "")
+                cur.execute("""
+                    SELECT id, name, url, api_key, transport, headers, is_active, created_at, updated_at
+                    FROM mcp_servers
+                    WHERE REPLACE(REPLACE(LOWER(name), '_', ''), '-', '') = %s
+                       OR LOWER(url) LIKE %s
+                """, (simplified, f"%{clean_name}%"))
+                row = cur.fetchone()
+                
+            # 3. Fallback especial para CRM: se for flowcrm ou crm
+            if not row and ("crm" in clean_name or "flow" in clean_name):
+                cur.execute("""
+                    SELECT id, name, url, api_key, transport, headers, is_active, created_at, updated_at
+                    FROM mcp_servers
+                    WHERE LOWER(name) LIKE '%crm%' OR LOWER(url) LIKE '%crm%'
+                    ORDER BY id ASC LIMIT 1
+                """)
+                row = cur.fetchone()
+                
         conn.close()
         if not row:
             return None

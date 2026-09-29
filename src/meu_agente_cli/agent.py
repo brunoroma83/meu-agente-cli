@@ -317,6 +317,11 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
                 except Exception as ex:
                     return f"Erro ao tentar importar/executar ferramenta customizada '{tool_name}': {ex}"
             
+            # Fallback resiliente: tenta verificar se é uma ferramenta de servidor MCP ativo (sem o prefixo mcp_)
+            mcp_res = tools.execute_mcp_tool(tool_name, args)
+            if not mcp_res.startswith("[ERRO] Ferramenta MCP '") and not mcp_res.startswith("[ERRO] Nenhum servidor MCP ativo"):
+                return mcp_res
+
             return f"Erro: Ferramenta '{tool_name}' não suportada."
     except Exception as e:
         return f"Erro na execução da ferramenta '{tool_name}': {str(e)}"

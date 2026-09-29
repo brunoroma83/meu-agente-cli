@@ -1016,29 +1016,121 @@ def manage_mcp_tool(
         total = sum(len(t) for t in all_tools.values())
         return f"[SUCCESS] Sincronização concluída! {total} ferramentas ativas em {len(all_tools)} servidores MCP."
 
+    elif action_clean in ("list_tools", "tools", "get_tools", "consultar_ferramentas"):
+        # Consulta e lista detalhadamente as ferramentas disponíveis nos servidores MCP
+        target_server = None
+        if name:
+            target_server = db.get_mcp_server(name)
+            if not target_server:
+                return f"[ERRO] Servidor MCP '{name}' não encontrado no banco de dados."
+        
+        servers_to_inspect = [target_server] if target_server else db.list_mcp_servers(only_active=True)
+        if not servers_to_inspect:
+            return "Nenhum servidor MCP ativo encontrado para listar ferramentas."
+            
+        lines = []
+        for s in servers_to_inspect:
+            s_name = s["name"]
+            tools_list = mcp_client.fetch_server_tools(s)
+            lines.append(f"=== FERRAMENTAS DO SERVIDOR MCP '{s_name.upper()}' ({len(tools_list)} disponíveis) ===")
+            lines.append(f"🔗 Endpoint: {s['url']}\n")
+            if not tools_list:
+                lines.append("  (Nenhuma ferramenta retornada pelo servidor ou falha na conexão)")
+                continue
+                
+            for idx, t in enumerate(tools_list, 1):
+                t_name = t["name"]
+                t_desc = t.get("description", "Sem descrição informada.")
+                schema = t.get("input_schema", {})
+                props = schema.get("properties", {})
+                reqs = schema.get("required", [])
+                
+                param_strs = []
+                for p_name, p_def in props.items():
+                    p_type = p_def.get("type", "any")
+                    is_req = "obrigatório" if p_name in reqs else "opcional"
+                    p_desc = p_def.get("description", "")
+                    if p_desc:
+                        param_strs.append(f"    - `{p_name}` ({p_type}, {is_req}): {p_desc}")
+                    else:
+                        param_strs.append(f"    - `{p_name}` ({p_type}, {is_req})")
+                        
+                lines.append(f"{idx}. **`{t_name}`** (Alias completo: `mcp_{s_name}_{t_name}`)")
+                lines.append(f"   📝 {t_desc}")
+                if param_strs:
+                    lines.append("   ⚙️ Parâmetros:")
+                    lines.extend(param_strs)
+                else:
+                    lines.append("   ⚙️ Parâmetros: Nenhum (chamada sem argumentos)")
+                lines.append("")
+                
+        return "\n".join(lines)
+
+    elif action_clean in ("describe_tool", "tool_info"):
+        if not name:
+            return "[ERRO] Informe o 'name' da ferramenta ou do servidor."
+        active_servers = db.list_mcp_servers(only_active=True)
+        for s in active_servers:
+            tools_list = mcp_client.fetch_server_tools(s)
+            for t in tools_list:
+                if t["name"].lower() == name.lower() or f"mcp_{s['name']}_{t['name']}".lower() == name.lower():
+                    schema_json = json.dumps(t.get("input_schema", {}), indent=2, ensure_ascii=False)
+                    return f"Detalhes da Ferramenta MCP '{t['name']}' ({s['name'].upper()}):\nDescrição: {t.get('description', '')}\nSchema JSON:\n{schema_json}"
+        return f"[ERRO] Ferramenta '{name}' não encontrada nos servidores MCP ativos."
+
     else:
-        return f"[ERRO] Ação '{action}' desconhecida. Use: save, list, test, remove, sync."
+        return f"[ERRO] Ação '{action}' desconhecida. Use: save, list, list_tools, test, remove, sync."
 
 def execute_mcp_tool(tool_name: str, args: dict) -> str:
-    """Roteia chamadas de ferramentas dinâmicas de MCP (ex: mcp_crm_criar_lead)."""
+    """
+    Roteia chamadas de ferramentas dinâmicas de MCP com resolução resiliente:
+    Aceita prefixos mcp_{server}_{tool}, mcp_{tool} ou o nome direto da ferramenta ({tool}).
+    """
     from meu_agente_cli import mcp_client
     import meu_agente_cli.db as db
 
+    active_servers = db.list_mcp_servers(only_active=True)
+    if not active_servers:
+        return "[ERRO] Nenhum servidor MCP ativo encontrado no momento."
+
+    # 1. Se começar com mcp_
     if tool_name.startswith("mcp_"):
-        raw = tool_name[4:]
-        parts = raw.split("_", 1)
+        raw = tool_name[4:]  # Remove o prefixo mcp_
+        
+        # Tenta casar primeiro com os servidores ativos conhecidos
+        for s in active_servers:
+            s_name = s["name"].lower()
+            if raw.lower().startswith(f"{s_name}_"):
+                actual_tool = raw[len(s_name) + 1:]
+                return mcp_client.call_mcp_tool(s["name"], actual_tool, args)
+                
+            # Variações sem underscore (ex: flow_crm vs flowcrm)
+            s_var = s_name.replace("_", "")
+            if raw.lower().startswith(f"{s_var}_"):
+                actual_tool = raw[len(s_var) + 1:]
+                return mcp_client.call_mcp_tool(s["name"], actual_tool, args)
+
+        # Se não casou com prefixo de servidor específico, tenta achar o nome direto em todos os servidores
+        # Ex: mcp_get_dashboard ou mcp_list_tasks
+        for s in active_servers:
+            tools = mcp_client.fetch_server_tools(s)
+            for t in tools:
+                if t["name"].lower() == raw.lower():
+                    return mcp_client.call_mcp_tool(s["name"], t["name"], args)
+
+    # 2. Se for o nome nativo da ferramenta (sem mcp_)
+    # Ex: get_dashboard, list_tasks, list_clients, schedule_meeting
+    for s in active_servers:
+        tools = mcp_client.fetch_server_tools(s)
+        for t in tools:
+            if t["name"].lower() == tool_name.lower():
+                return mcp_client.call_mcp_tool(s["name"], t["name"], args)
+
+    # 3. Fallback de split básico
+    if tool_name.startswith("mcp_"):
+        parts = tool_name[4:].split("_", 1)
         if len(parts) == 2:
-            server_name, actual_tool_name = parts[0], parts[1]
-            return mcp_client.call_mcp_tool(server_name, actual_tool_name, args)
-        else:
-            active_servers = db.list_mcp_servers(only_active=True)
-            for s in active_servers:
-                s_name = s["name"]
-                tools = mcp_client.fetch_server_tools(s)
-                for t in tools:
-                    if t["name"] == raw:
-                        return mcp_client.call_mcp_tool(s_name, raw, args)
-            return f"[ERRO] Formato de ferramenta MCP inválido: '{tool_name}'."
-    else:
-        return f"[ERRO] Nome de ferramenta não reconhecido como MCP: '{tool_name}'."
+            return mcp_client.call_mcp_tool(parts[0], parts[1], args)
+
+    return f"[ERRO] Ferramenta MCP '{tool_name}' não encontrada nos servidores ativos."
 

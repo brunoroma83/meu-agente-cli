@@ -263,7 +263,7 @@ def sanitize_arguments(arguments: dict, input_schema: Optional[dict] = None) -> 
     
     clean_args = {}
     for k, v in arguments.items():
-        prop_def = props.get(k, {})
+        prop_def = props.get(k) or {}
         expected_type = prop_def.get("type", "")
         
         # Se for vazio ou nulo
@@ -273,7 +273,7 @@ def sanitize_arguments(arguments: dict, input_schema: Optional[dict] = None) -> 
             continue
             
         # Converte tipos se necessário
-        if expected_type == "integer" and isinstance(v, str):
+        if (expected_type in ("integer", "int") or (not expected_type and k.endswith("_id"))) and isinstance(v, str):
             clean_str = v.strip()
             if clean_str.lstrip("-").isdigit():
                 clean_args[k] = int(clean_str)

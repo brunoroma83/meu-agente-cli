@@ -90,54 +90,57 @@ def initialize_components() -> bool:
         config.save_bootstrap_config(current_config)
         connected_lm = llm.test_lm_studio_connection()
         
-    while not connected_lm:
-        console.print(Panel(
-            f"[bold red]Erro de Conexão com LM Studio:[/bold red]\n"
-            f"Não foi possível conectar ao LM Studio em [cyan]{config.get_lm_studio_url()}[/cyan].\n\n"
-            f"Certifique-se de que:\n"
-            f"1. O LM Studio está rodando no Windows host.\n"
-            f"2. O servidor do LM Studio está INICIADO na porta 1234.\n"
-            f"3. O CORS está habilitado nas configurações do LM Studio.\n"
-            f"4. A firewall do Windows permite conexões na porta do LM Studio.",
-            title="Erro de LM Studio",
-            border_style="red"
-        ))
-        
-        # Pergunta se o usuário deseja configurar manualmente ou continuar offline
-        option = Prompt.ask(
-            "O que deseja fazer?\n"
-            "[green][1][/green] Digitar o IP/Host do LM Studio manualmente\n"
-            "[yellow][2][/yellow] Tentar reconectar com o IP atual\n"
-            "[red][3][/red] Continuar offline (sem LLM)\n"
-            "Escolha",
-            choices=["1", "2", "3"],
-            default="1"
-        )
-        
-        if option == "1":
-            custom_host = Prompt.ask("Digite o IP/Host do LM Studio (ex: 192.168.1.5 ou localhost)").strip()
-            custom_port_str = Prompt.ask("Digite a porta do LM Studio", default="1234").strip()
-            custom_port = int(custom_port_str) if custom_port_str.isdigit() else 1234
-            
-            # Atualiza o arquivo de configuração
-            current_config = config.load_bootstrap_config()
-            current_config["lm_studio_host"] = custom_host
-            current_config["lm_studio_port"] = custom_port
-            config.save_bootstrap_config(current_config)
-            
-            console.print(f"[blue]Testando conexão em {config.get_lm_studio_url()}...[/blue]")
-            connected_lm = llm.test_lm_studio_connection()
-            if connected_lm:
-                console.print(f"[bold green][SUCESSO][/bold green] Conectado e configurado com sucesso!")
-                break
-        elif option == "2":
-            console.print(f"[blue]Testando conexão novamente em {config.get_lm_studio_url()}...[/blue]")
-            connected_lm = llm.test_lm_studio_connection()
-        else: # Option "3"
-            console.print("[yellow]Continuando em modo offline. Algumas ferramentas de chat inteligente não funcionarão.[/yellow]")
-            break
+    if not connected_lm and not sys.stdin.isatty():
+        console.print("[yellow]Aviso: LM Studio inacessível e ambiente não-interativo detectado. Prosseguindo inicialização com provedor configurado / backup LLM.[/yellow]")
     else:
-        console.print(f"[bold green][SUCESSO][/bold green] Conectado ao LM Studio em [cyan]{config.get_lm_studio_url()}[/cyan]!")
+        while not connected_lm:
+            console.print(Panel(
+                f"[bold red]Erro de Conexão com LM Studio:[/bold red]\n"
+                f"Não foi possível conectar ao LM Studio em [cyan]{config.get_lm_studio_url()}[/cyan].\n\n"
+                f"Certifique-se de que:\n"
+                f"1. O LM Studio está rodando no Windows host.\n"
+                f"2. O servidor do LM Studio está INICIADO na porta 1234.\n"
+                f"3. O CORS está habilitado nas configurações do LM Studio.\n"
+                f"4. A firewall do Windows permite conexões na porta do LM Studio.",
+                title="Erro de LM Studio",
+                border_style="red"
+            ))
+            
+            # Pergunta se o usuário deseja configurar manualmente ou continuar offline
+            option = Prompt.ask(
+                "O que deseja fazer?\n"
+                "[green][1][/green] Digitar o IP/Host do LM Studio manualmente\n"
+                "[yellow][2][/yellow] Tentar reconectar com o IP atual\n"
+                "[red][3][/red] Continuar offline (sem LLM)\n"
+                "Escolha",
+                choices=["1", "2", "3"],
+                default="1"
+            )
+            
+            if option == "1":
+                custom_host = Prompt.ask("Digite o IP/Host do LM Studio (ex: 192.168.1.5 ou localhost)").strip()
+                custom_port_str = Prompt.ask("Digite a porta do LM Studio", default="1234").strip()
+                custom_port = int(custom_port_str) if custom_port_str.isdigit() else 1234
+                
+                # Atualiza o arquivo de configuração
+                current_config = config.load_bootstrap_config()
+                current_config["lm_studio_host"] = custom_host
+                current_config["lm_studio_port"] = custom_port
+                config.save_bootstrap_config(current_config)
+                
+                console.print(f"[blue]Testando conexão em {config.get_lm_studio_url()}...[/blue]")
+                connected_lm = llm.test_lm_studio_connection()
+                if connected_lm:
+                    console.print(f"[bold green][SUCESSO][/bold green] Conectado e configurado com sucesso!")
+                    break
+            elif option == "2":
+                console.print(f"[blue]Testando conexão novamente em {config.get_lm_studio_url()}...[/blue]")
+                connected_lm = llm.test_lm_studio_connection()
+            else: # Option "3"
+                console.print("[yellow]Continuando em modo offline. Algumas ferramentas de chat inteligente não funcionarão.[/yellow]")
+                break
+        else:
+            console.print(f"[bold green][SUCESSO][/bold green] Conectado ao LM Studio em [cyan]{config.get_lm_studio_url()}[/cyan]!")
 
     # 4. Configura modelo padrão caso não exista
     active_model = db.get_setting("active_model")
