@@ -434,6 +434,21 @@ def init_database() -> bool:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # 12. Tabela de Servidores MCP (Model Context Protocol)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mcp_servers (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(100) UNIQUE NOT NULL,
+                    url TEXT NOT NULL,
+                    api_key TEXT,
+                    transport VARCHAR(20) DEFAULT 'sse',
+                    headers JSONB DEFAULT '{}'::jsonb,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             
             # Migrations para bases de dados existentes
             cur.execute("ALTER TABLE user_notes ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
@@ -543,6 +558,56 @@ def set_chat_history_limit(limit: int) -> bool:
     if limit < 1:
         return False
     return set_setting("chat_history_limit", str(limit))
+
+def get_backup_llm_config() -> dict:
+    """Retorna a configuração completa do LLM de backup."""
+    enabled_val = get_setting("backup_llm_enabled", "false")
+    return {
+        "enabled": str(enabled_val).lower() in ("true", "1", "yes"),
+        "provider": get_setting("backup_llm_provider", "") or "",
+        "model": get_setting("backup_active_model", "") or "",
+        "api_key": get_setting("backup_provider_api_key", "") or "",
+        "base_url": get_setting("backup_provider_base_url", "") or ""
+    }
+
+def set_backup_llm_config(
+    enabled: Optional[bool] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None
+) -> bool:
+    """Atualiza as configurações do LLM de backup no banco de dados."""
+    success = True
+    if enabled is not None:
+        success = success and set_setting("backup_llm_enabled", "true" if enabled else "false")
+    if provider is not None:
+        success = success and set_setting("backup_llm_provider", provider.strip().lower())
+    if model is not None:
+        success = success and set_setting("backup_active_model", model.strip())
+    if api_key is not None:
+        success = success and set_setting("backup_provider_api_key", api_key.strip())
+    if base_url is not None:
+        success = success and set_setting("backup_provider_base_url", base_url.strip())
+    return success
+
+def get_provider_api_key(provider: str) -> str:
+    """Busca a API key específica do provedor ou fallback para provider_api_key."""
+    specific_key = get_setting(f"api_key_{provider}", "")
+    if specific_key:
+        return specific_key
+    active_prov = get_setting("llm_provider", "lm_studio")
+    if provider == active_prov:
+        return get_setting("provider_api_key", "") or ""
+    return ""
+
+def set_provider_api_key(provider: str, api_key: str) -> bool:
+    """Salva a API key específica do provedor e atualiza provider_api_key se for o ativo."""
+    ok = set_setting(f"api_key_{provider}", api_key)
+    active_prov = get_setting("llm_provider", "lm_studio")
+    if provider == active_prov:
+        set_setting("provider_api_key", api_key)
+    return ok
 
 # 2. Histórico de Conversa (Chat History)
 def save_chat_message(sender: str, message: Any) -> bool:
@@ -2521,3 +2586,165 @@ def seed_default_agents():
             allowed_tools=None,
             is_default=True
         )
+
+    # 3. Agente CRM & Vendas (MCP)
+    if not get_agent("crm"):
+        crm_prompt = (
+            "Você é o 'Agente Especialista em CRM & Vendas', focado em gerenciar relacionamentos, clientes, oportunidades, leads, reuniões e tarefas.\n"
+            "Sua missão principal é:\n"
+            "1. CONEXÃO COM O CRM VIA MCP:\n"
+            "   - Utilizar as ferramentas MCP de CRM disponíveis para consultar histórico, cadastrar clientes, atualizar leads, agendar reuniões e gerenciar tarefas.\n"
+            "   - Sempre que o usuário pedir para listar, ver ou consultar tarefas ou clientes, você DEVE EXCLUSIVAMENTE emitir o bloco JSON da ferramenta correspondente (ex: 'mcp_crm_list_tasks', 'mcp_crm_list_clients', 'mcp_crm_get_dashboard').\n"
+            "   - É TERMINANTEMENTE PROIBIDO inventar tarefas ou clientes fictícios em texto sem consultar o CRM via ferramenta MCP!\n"
+            "2. PRECISÃO E REQUISITOS OBRIGATÓRIOS (HUMAN-IN-THE-LOOP):\n"
+            "   - Para qualquer operação de criação ou alteração (ex: cadastrar lead, fechar negócio, alterar status ou valores), certifique-se de que possui todos os parâmetros obrigatórios.\n"
+            "   - Se faltar qualquer dado essencial (como nome do cliente, e-mail, telefone, ID ou valor da proposta), NUNCA invente nem presuma informações fictícias.\n"
+            "   - Pare a execução da ferramenta, formule uma pergunta clara e objetiva ao usuário solicitando o dado faltante e aguarde a resposta.\n"
+            "3. COMUNICAÇÃO OBJETIVA E ESTRUTURADA:\n"
+            "   - Apresente resumos claros e organizados das consultas do CRM utilizando listas limpas ou tópicos formatados em Markdown."
+        )
+        create_or_update_agent(
+            slug="crm",
+            name="Especialista em CRM & Clientes",
+            icon="💼",
+            description="Agente especialista em gestão de CRM, clientes, leads e pipeline de vendas integrado via ferramentas MCP.",
+            system_prompt=crm_prompt,
+            allowed_tools=None,
+            is_default=True
+        )
+
+# =====================================================================
+# GERENCIAMENTO DE SERVIDORES MCP (MODEL CONTEXT PROTOCOL)
+# =====================================================================
+
+def save_mcp_server(name: str, url: str, api_key: Optional[str] = None, transport: str = "sse", headers: Optional[Dict[str, Any]] = None) -> bool:
+    """Insere ou atualiza as configurações de um servidor MCP no banco de dados."""
+    try:
+        clean_name = clean_string(name).strip().lower()
+        clean_u = clean_string(url).strip()
+        clean_key = clean_string(api_key).strip() if api_key else None
+        clean_trans = clean_string(transport).strip().lower() or "sse"
+        headers_json = json.dumps(headers or {})
+        
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO mcp_servers (name, url, api_key, transport, headers, is_active, updated_at)
+                VALUES (%s, %s, %s, %s, %s::jsonb, TRUE, CURRENT_TIMESTAMP)
+                ON CONFLICT (name) DO UPDATE SET
+                    url = EXCLUDED.url,
+                    api_key = EXCLUDED.api_key,
+                    transport = EXCLUDED.transport,
+                    headers = EXCLUDED.headers,
+                    is_active = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (clean_name, clean_u, clean_key, clean_trans, headers_json))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logging.error("Erro ao salvar servidor MCP '%s': %s", name, e)
+        return False
+
+def get_mcp_server(name: str) -> Optional[Dict[str, Any]]:
+    """Busca os dados de um servidor MCP pelo nome."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, name, url, api_key, transport, headers, is_active, created_at, updated_at
+                FROM mcp_servers
+                WHERE LOWER(name) = LOWER(%s)
+            """, (name.strip(),))
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "name": row[1],
+            "url": row[2],
+            "api_key": row[3],
+            "transport": row[4],
+            "headers": row[5] if isinstance(row[5], dict) else json.loads(row[5] or "{}"),
+            "is_active": row[6],
+            "created_at": row[7],
+            "updated_at": row[8],
+        }
+    except Exception as e:
+        logging.error("Erro ao buscar servidor MCP '%s': %s", name, e)
+        return None
+
+def list_mcp_servers(only_active: bool = False) -> List[Dict[str, Any]]:
+    """Lista todos os servidores MCP cadastrados."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            query = """
+                SELECT id, name, url, api_key, transport, headers, is_active, created_at, updated_at
+                FROM mcp_servers
+            """
+            if only_active:
+                query += " WHERE is_active = TRUE"
+            query += " ORDER BY name ASC"
+            cur.execute(query)
+            rows = cur.fetchall()
+        conn.close()
+        
+        servers = []
+        for row in rows:
+            servers.append({
+                "id": row[0],
+                "name": row[1],
+                "url": row[2],
+                "api_key": row[3],
+                "transport": row[4],
+                "headers": row[5] if isinstance(row[5], dict) else json.loads(row[5] or "{}"),
+                "is_active": row[6],
+                "created_at": row[7],
+                "updated_at": row[8],
+            })
+        return servers
+    except Exception as e:
+        logging.error("Erro ao listar servidores MCP: %s", e)
+        return []
+
+def delete_mcp_server(name: str) -> bool:
+    """Remove um servidor MCP cadastrado."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM mcp_servers WHERE LOWER(name) = LOWER(%s)", (name.strip(),))
+            deleted = cur.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+    except Exception as e:
+        logging.error("Erro ao excluir servidor MCP '%s': %s", name, e)
+        return False
+
+def toggle_mcp_server(name: str, is_active: Optional[bool] = None) -> bool:
+    """Ativa ou desativa um servidor MCP."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            if is_active is None:
+                cur.execute("""
+                    UPDATE mcp_servers
+                    SET is_active = NOT is_active, updated_at = CURRENT_TIMESTAMP
+                    WHERE LOWER(name) = LOWER(%s)
+                """, (name.strip(),))
+            else:
+                cur.execute("""
+                    UPDATE mcp_servers
+                    SET is_active = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE LOWER(name) = LOWER(%s)
+                """, (is_active, name.strip()))
+            updated = cur.rowcount > 0
+        conn.commit()
+        conn.close()
+        return updated
+    except Exception as e:
+        logging.error("Erro ao alternar status do servidor MCP '%s': %s", name, e)
+        return False
+

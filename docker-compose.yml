@@ -11,6 +11,11 @@ services:
       - DB_PASSWORD=postgres_seguro
       # URL para o LM Studio no Windows Host
       - LM_STUDIO_URL=http://host.docker.internal:1234
+      # Configuração persistente do Google Cloud SDK
+      - CLOUDSDK_CONFIG=/root/.config/meu-agente-cli/gcloud
+      # Cloudflare Workers AI
+      - CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     volumes:
       # Persiste arquivos de configurações e banco de dados
       - agent_data:/root/.config/meu-agente-cli
@@ -37,8 +42,11 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=postgres_seguro
       - LM_STUDIO_URL=http://host.docker.internal:1234
+      - CLOUDSDK_CONFIG=/root/.config/meu-agente-cli/gcloud
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_AUTHORIZED_USER_IDS=${TELEGRAM_AUTHORIZED_USER_IDS}
+      - CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     volumes:
       - agent_data:/root/.config/meu-agente-cli
       - .:/app

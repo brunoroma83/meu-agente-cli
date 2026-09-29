@@ -933,3 +933,112 @@ def transcribe_audio_tool(file_path: str, context_length: Optional[int] = 2500) 
         f"📄 Arquivo salvo: {output_txt}\n\n"
         f"Transcrição:\n{retorno_texto}"
     )
+
+def manage_mcp_tool(
+    action: str,
+    name: Optional[str] = None,
+    url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    transport: str = "sse",
+    headers: Optional[dict] = None
+) -> str:
+    """Gerencia servidores MCP (salvar, listar, testar, remover, sincronizar)."""
+    import meu_agente_cli.db as db
+    from meu_agente_cli import mcp_client
+    
+    action_clean = (action or "").strip().lower()
+
+    if action_clean in ("save", "add", "configure"):
+        if not name or not url:
+            return "[ERRO] Parâmetros obrigatórios ausentes: 'name' e 'url' devem ser informados para salvar o servidor MCP."
+        
+        name_clean = name.strip().lower()
+        success = db.save_mcp_server(name=name_clean, url=url, api_key=api_key, transport=transport, headers=headers)
+        if not success:
+            return f"[ERRO] Falha ao gravar configurações do servidor MCP '{name_clean}' no banco de dados."
+        
+        # Testa a conexão imediatamente
+        test_ok, test_msg, tools = mcp_client.test_mcp_connection(url, api_key, transport, headers)
+        if test_ok:
+            tool_names = [t["name"] for t in tools]
+            mcp_client.fetch_server_tools({"name": name_clean, "url": url, "api_key": api_key, "transport": transport, "headers": headers}, force_refresh=True)
+            return (
+                f"[SUCCESS] Servidor MCP '{name_clean}' salvo e conectado com sucesso!\n"
+                f"🔗 URL: {url}\n"
+                f"🛠️ Ferramentas Descobertas ({len(tools)}): {', '.join(tool_names) if tool_names else 'Nenhuma ferramenta exposta'}\n"
+                f"As ferramentas foram registradas dinamicamente e já podem ser usadas pelo agente e subagentes."
+            )
+        else:
+            return (
+                f"[AVISO] Servidor MCP '{name_clean}' salvo no banco, mas o teste inicial de conexão falhou:\n"
+                f"{test_msg}\n"
+                f"Verifique se o serviço está em execução na URL informada."
+            )
+
+    elif action_clean in ("list", "ls"):
+        servers = db.list_mcp_servers()
+        if not servers:
+            return "Nenhum servidor MCP cadastrado no momento. Use a ação 'save' para cadastrar."
+        
+        lines = ["=== SERVIDORES MCP CADASTRADOS ==="]
+        for s in servers:
+            status = "🟢 Ativo" if s["is_active"] else "🔴 Inativo"
+            has_key = "Sim (configurada)" if s.get("api_key") else "Não"
+            lines.append(f"- Nome: {s['name']} | Status: {status} | URL: {s['url']} | Chave API: {has_key} | Transporte: {s['transport']}")
+        return "\n".join(lines)
+
+    elif action_clean == "test":
+        if not name:
+            return "[ERRO] Informe o 'name' do servidor MCP para testar."
+        server_data = db.get_mcp_server(name)
+        if not server_data:
+            return f"[ERRO] Servidor MCP '{name}' não encontrado no banco de dados."
+        
+        test_ok, test_msg, tools = mcp_client.test_mcp_connection(
+            server_data["url"], server_data.get("api_key"), server_data.get("transport", "sse"), server_data.get("headers")
+        )
+        if test_ok:
+            tool_names = [t["name"] for t in tools]
+            return f"[SUCCESS] Conexão com '{name}' bem-sucedida!\nFerramentas ({len(tools)}): {', '.join(tool_names)}"
+        else:
+            return f"[ERRO] Falha na conexão com '{name}': {test_msg}"
+
+    elif action_clean in ("remove", "delete"):
+        if not name:
+            return "[ERRO] Informe o 'name' do servidor MCP para remover."
+        if db.delete_mcp_server(name):
+            return f"[SUCCESS] Servidor MCP '{name}' removido com sucesso."
+        else:
+            return f"[ERRO] Servidor MCP '{name}' não encontrado ou erro na exclusão."
+
+    elif action_clean == "sync":
+        all_tools = mcp_client.sync_all_active_tools(force_refresh=True)
+        total = sum(len(t) for t in all_tools.values())
+        return f"[SUCCESS] Sincronização concluída! {total} ferramentas ativas em {len(all_tools)} servidores MCP."
+
+    else:
+        return f"[ERRO] Ação '{action}' desconhecida. Use: save, list, test, remove, sync."
+
+def execute_mcp_tool(tool_name: str, args: dict) -> str:
+    """Roteia chamadas de ferramentas dinâmicas de MCP (ex: mcp_crm_criar_lead)."""
+    from meu_agente_cli import mcp_client
+    import meu_agente_cli.db as db
+
+    if tool_name.startswith("mcp_"):
+        raw = tool_name[4:]
+        parts = raw.split("_", 1)
+        if len(parts) == 2:
+            server_name, actual_tool_name = parts[0], parts[1]
+            return mcp_client.call_mcp_tool(server_name, actual_tool_name, args)
+        else:
+            active_servers = db.list_mcp_servers(only_active=True)
+            for s in active_servers:
+                s_name = s["name"]
+                tools = mcp_client.fetch_server_tools(s)
+                for t in tools:
+                    if t["name"] == raw:
+                        return mcp_client.call_mcp_tool(s_name, raw, args)
+            return f"[ERRO] Formato de ferramenta MCP inválido: '{tool_name}'."
+    else:
+        return f"[ERRO] Nome de ferramenta não reconhecido como MCP: '{tool_name}'."
+

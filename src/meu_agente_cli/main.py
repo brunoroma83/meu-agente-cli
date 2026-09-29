@@ -716,6 +716,141 @@ def handle_agent_command(parts: list, console: Console):
         else:
             console.print(f"[red]Subcomando ou agente desconhecido: '{subcmd}'. Digite [green]/agent list[/green] para ver as opções.[/red]")
 
+def handle_mcp_command(parts: list, console: Console):
+    """Gerencia o comando /mcp e seus subcomandos (list, add, test, toggle, delete, sync)."""
+    from meu_agente_cli import mcp_client
+    import meu_agente_cli.tools as cli_tools
+
+    subcmd = parts[1].lower() if len(parts) > 1 else "list"
+
+    if subcmd in ["list", "ls"]:
+        servers = db.list_mcp_servers()
+        if not servers:
+            console.print("[yellow]Nenhum servidor MCP cadastrado. Use [green]/mcp add <nome> <url> [api_key][/green] para cadastrar.[/yellow]")
+            return
+
+        table = Table(title="🔌 Servidores MCP Conectados (Model Context Protocol)", border_style="cyan")
+        table.add_column("Status", justify="center")
+        table.add_column("Nome", style="bold cyan")
+        table.add_column("URL", style="white")
+        table.add_column("Chave API", justify="center")
+        table.add_column("Transporte", style="magenta")
+        table.add_column("Ferramentas", justify="center", style="green")
+
+        for s in servers:
+            is_act = s["is_active"]
+            status_disp = "[bold green]ATIVO 🟢[/bold green]" if is_act else "[dim red]INATIVO 🔴[/dim red]"
+            has_key = "[green]Configurada[/green]" if s.get("api_key") else "[dim]Nenhuma[/dim]"
+            
+            cached = mcp_client._MCP_CACHE.get(s["name"], {}).get("tools", [])
+            tools_disp = f"{len(cached)} tools" if cached else "Pendente (/mcp test)"
+            
+            table.add_row(
+                status_disp,
+                s["name"],
+                s["url"],
+                has_key,
+                s.get("transport", "sse"),
+                tools_disp
+            )
+
+        console.print(table)
+        console.print("[dim]Comandos: /mcp add <nome> <url> [api_key] | /mcp test <nome> | /mcp toggle <nome> | /mcp sync | /mcp delete <nome>[/dim]\n")
+
+    elif subcmd in ["add", "save", "set"]:
+        if len(parts) >= 4:
+            name = parts[2].lower().strip()
+            url = parts[3].strip()
+            api_key = parts[4].strip() if len(parts) > 4 else None
+        elif len(parts) == 3:
+            name = parts[2].lower().strip()
+            url = Prompt.ask("URL do servidor MCP (ex: http://host.docker.internal:8000/sse)").strip()
+            api_key = Prompt.ask("API Key ou Token de Autenticação (deixe em branco se não houver)", default="").strip() or None
+        else:
+            name = Prompt.ask("Nome amigável do servidor MCP (ex: crm)").strip().lower()
+            url = Prompt.ask("URL do servidor MCP (ex: http://host.docker.internal:8000/sse)").strip()
+            api_key = Prompt.ask("API Key ou Token de Autenticação (deixe em branco se não houver)", default="").strip() or None
+
+        if not name or not url:
+            console.print("[red]Erro: Nome e URL são obrigatórios para registrar o servidor MCP.[/red]")
+            return
+
+        with console.status(f"[bold blue]Conectando e testando servidor MCP '{name}'...", spinner="dots"):
+            res = cli_tools.manage_mcp_tool(action="save", name=name, url=url, api_key=api_key)
+
+        console.print(Panel(res, title=f"Configuração MCP: {name}", border_style="cyan"))
+
+    elif subcmd == "test":
+        if len(parts) < 3:
+            console.print("[red]Uso: /mcp test <nome>[/red]")
+            return
+        name = parts[2].lower().strip()
+        server_data = db.get_mcp_server(name)
+        if not server_data:
+            console.print(f"[bold red]Erro:[/bold red] Servidor MCP '{name}' não encontrado.")
+            return
+
+        with console.status(f"[bold blue]Testando conexão e descobrindo ferramentas de '{name}'...", spinner="dots"):
+            success, msg, tools = mcp_client.test_mcp_connection(
+                server_data["url"], server_data.get("api_key"), server_data.get("transport", "sse"), server_data.get("headers")
+            )
+
+        if success:
+            console.print(f"[bold green]Sucesso:[/bold green] {msg}\n")
+            if tools:
+                tools_table = Table(title=f"Ferramentas Disponíveis no Servidor '{name}'", border_style="green")
+                tools_table.add_column("Nome da Ferramenta", style="cyan")
+                tools_table.add_column("Descrição", style="white")
+                tools_table.add_column("Parâmetros Obrigatórios", style="yellow")
+                
+                for t in tools:
+                    schema = t.get("input_schema", {})
+                    req = schema.get("required", [])
+                    tools_table.add_row(
+                        f"mcp_{name}_{t['name']}",
+                        t.get("description", "-"),
+                        ", ".join(req) if req else "[dim]Nenhum[/dim]"
+                    )
+                console.print(tools_table)
+            else:
+                console.print("[yellow]O servidor conectou com sucesso, mas não expôs nenhuma ferramenta.[/yellow]")
+        else:
+            console.print(f"[bold red]Falha na conexão com '{name}':[/bold red] {msg}")
+
+    elif subcmd in ["toggle", "ativar", "desativar"]:
+        if len(parts) < 3:
+            console.print("[red]Uso: /mcp toggle <nome>[/red]")
+            return
+        name = parts[2].lower().strip()
+        if db.toggle_mcp_server(name):
+            s = db.get_mcp_server(name)
+            state_str = "[bold green]ATIVADO[/bold green]" if s["is_active"] else "[bold red]DESATIVADO[/bold red]"
+            console.print(f"Status do servidor MCP '{name}' alterado para: {state_str}")
+        else:
+            console.print(f"[bold red]Erro:[/bold red] Servidor MCP '{name}' não encontrado.")
+
+    elif subcmd in ["delete", "del", "remove"]:
+        if len(parts) < 3:
+            console.print("[red]Uso: /mcp delete <nome>[/red]")
+            return
+        name = parts[2].lower().strip()
+        if Confirm.ask(f"Deseja realmente remover o servidor MCP '{name}'?", default=False):
+            if db.delete_mcp_server(name):
+                console.print(f"[bold green]Servidor MCP '{name}' removido com sucesso.[/bold green]")
+            else:
+                console.print(f"[bold red]Erro ao remover servidor MCP '{name}'.[/bold red]")
+        else:
+            console.print("[yellow]Remoção cancelada.[/yellow]")
+
+    elif subcmd == "sync":
+        with console.status("[bold blue]Sincronizando todas as ferramentas MCP ativas...", spinner="dots"):
+            all_tools = mcp_client.sync_all_active_tools(force_refresh=True)
+        total = sum(len(t) for t in all_tools.values())
+        console.print(f"[bold green]Sincronização concluída com sucesso![/bold green] Total de {total} ferramentas ativas em {len(all_tools)} servidor(es) MCP.")
+
+    else:
+        console.print(f"[red]Subcomando MCP desconhecido: '{subcmd}'. Opções: list, add, test, toggle, sync, delete.[/red]")
+
 def handle_slash_command(cmd_input: str) -> bool:
     """
     Processa os comandos com barra. Retorna True se o loop principal deve continuar,
@@ -732,11 +867,15 @@ def handle_slash_command(cmd_input: str) -> bool:
     elif command == "/agent":
         handle_agent_command(parts, console)
 
+    elif command == "/mcp":
+        handle_mcp_command(parts, console)
+
     elif command == "/help":
         console.print(Panel(
             "[bold cyan]Comandos Disponíveis:[/bold cyan]\n"
             "- [green]/help[/green]: Mostra esta lista de ajuda.\n"
             "- [green]/agent[/green]: Gerencia agentes especialistas. Opções: [green]/agent[/green] (listar), [green]/agent use <slug>[/green] (alternar), [green]/agent info <slug>[/green], [green]/agent create[/green], [green]/agent improve <slug> <instrução>[/green], [green]/agent delete <slug>[/green].\n"
+            "- [green]/mcp[/green]: Central MCP (Model Context Protocol). Conecta servidores MCP (ex: CRM), descobre ferramentas e gerencia credenciais. Opções: [green]/mcp[/green] (listar), [green]/mcp add <nome> <url> [api_key][/green], [green]/mcp test <nome>[/green], [green]/mcp toggle <nome>[/green], [green]/mcp sync[/green], [green]/mcp delete <nome>[/green].\n"
             "- [green]/status[/green]: Mostra conexões e estado atual de segurança.\n"
             "- [green]/clear[/green]: Limpa o histórico de conversa (reseta o contexto do agente).\n"
             "- [green]/history <limite>[/green]: Exibe ou altera a quantidade de mensagens enviadas no histórico (contexto recente) ao LLM.\n"
@@ -785,145 +924,206 @@ def handle_slash_command(cmd_input: str) -> bool:
         console.print(f"[bold cyan]Status do Sistema:[/bold cyan]")
         console.print(f"- Modo de Segurança: {safe_str}")
         console.print(f"- Agente Ativo: [bold yellow]{agent_str}[/bold yellow]")
-        console.print(f"- Provedor Ativo: [yellow]{llm_provider.upper()}[/yellow]")
-        console.print(f"- Modelo Ativo: [yellow]{active_model}[/yellow]")
+        console.print(f"- Provedor Principal: [yellow]{llm_provider.upper()}[/yellow]")
+        console.print(f"- Modelo Principal: [yellow]{active_model}[/yellow]")
         
-        # Teste rápido de conexão
-        conn = llm.test_provider_connection()
-        conn_str = "[bold green]Conectado[/bold green]" if conn else "[bold red]Desconectado[/bold red]"
-        console.print(f"- Status do Provedor: {conn_str}")
+        # Teste de conexão do principal
+        conn = llm.test_provider_connection("primary")
+        conn_str = "[bold green]Conectado[/bold green]" if conn else "[bold red]Desconectado / Indisponível[/bold red]"
+        console.print(f"- Status LLM Principal: {conn_str}")
+        
+        # Informações e status do Backup
+        backup_cfg = db.get_backup_llm_config()
+        if backup_cfg["enabled"] and backup_cfg["provider"]:
+            b_prov = backup_cfg["provider"].upper()
+            b_mod = backup_cfg["model"] or "padrão"
+            b_conn = llm.test_backup_provider_connection()
+            b_conn_str = "[bold green]Conectado[/bold green]" if b_conn else "[bold red]Desconectado / Indisponível[/bold red]"
+            console.print(f"- LLM de Backup: [bold green]ATIVADO[/bold green] ({b_prov} - {b_mod})")
+            console.print(f"- Status LLM Backup: {b_conn_str}")
+        else:
+            console.print(f"- LLM de Backup: [bold red]DESATIVADO[/bold red]")
         
     elif command == "/models":
-        # 1. Menu de Provedores
+        def _configure_provider(is_backup: bool = False):
+            target_label = "LLM de BACKUP" if is_backup else "LLM PRINCIPAL"
+            if is_backup:
+                cfg = db.get_backup_llm_config()
+                current_p = cfg.get("provider") or "Nenhum"
+                current_m = cfg.get("model") or "Nenhum"
+            else:
+                current_p = db.get_setting("llm_provider", "lm_studio")
+                current_m = db.get_setting("active_model", "Nenhum")
+                
+            console.print(Panel(
+                f"[bold cyan]Escolha o Provedor para {target_label}:[/bold cyan]\n\n"
+                "1. [green]LM Studio[/green] (Local)\n"
+                "2. [green]OpenAI[/green]\n"
+                "3. [green]Google Gemini[/green]\n"
+                "4. [green]Anthropic Claude[/green]\n"
+                "5. [green]DeepSeek[/green]\n"
+                "6. [green]Alibaba Qwen[/green]\n"
+                "7. [green]Moonshot Kimi[/green]\n"
+                "8. [green]Personalizado[/green] (OpenAI-Compatible)\n"
+                "9. [green]Cloudflare Workers AI[/green]",
+                title=f"Configuração - {target_label}"
+            ))
+            console.print(f"Atual: Provedor [yellow]{current_p.upper()}[/yellow] | Modelo [yellow]{current_m}[/yellow]")
+            provider_sel = Prompt.ask("Digite o número do provedor desejado (ou Enter para manter o atual)", default="")
+            
+            providers_map = {
+                "1": "lm_studio",
+                "2": "openai",
+                "3": "gemini",
+                "4": "claude",
+                "5": "deepseek",
+                "6": "qwen",
+                "7": "kimi",
+                "8": "custom",
+                "9": "cloudflare"
+            }
+            provider = providers_map.get(provider_sel, current_p if current_p != "Nenhum" else "lm_studio")
+            
+            if provider == "lm_studio":
+                models = llm.get_available_models()
+                if not models:
+                    console.print("[red]Nenhum modelo detectado no LM Studio. Certifique-se de que o LM Studio está rodando.[/red]")
+                    if not is_backup:
+                        return
+                    models = ["local-model"]
+                
+                table = Table(title="Modelos Disponíveis no LM Studio")
+                table.add_column("Índice", justify="center", style="cyan")
+                table.add_column("Nome do Modelo", style="magenta")
+                table.add_column("Status", justify="center", style="green")
+                
+                for idx, m in enumerate(models, 1):
+                    status = "[bold green]Ativo[/bold green]" if m == current_m else ""
+                    table.add_row(str(idx), m, status)
+                console.print(table)
+                
+                sel = Prompt.ask("Digite o índice do modelo desejado", default="1")
+                chosen_model = models[0]
+                if sel.isdigit():
+                    idx_val = int(sel) - 1
+                    if 0 <= idx_val < len(models):
+                        chosen_model = models[idx_val]
+                        
+                if is_backup:
+                    db.set_backup_llm_config(enabled=True, provider="lm_studio", model=chosen_model, api_key="", base_url="")
+                    console.print(f"[bold green][SUCESSO][/bold green] LLM de Backup configurado: [yellow]LM Studio[/yellow] - [yellow]{chosen_model}[/yellow].")
+                else:
+                    db.set_setting("llm_provider", "lm_studio")
+                    db.set_setting("active_model", chosen_model)
+                    console.print(f"[bold green][SUCESSO][/bold green] LLM Principal configurado: [yellow]LM Studio[/yellow] - [yellow]{chosen_model}[/yellow].")
+                return
+
+            # Provedores Externos
+            saved_key = db.get_provider_api_key(provider) or (os.environ.get("CLOUDFLARE_API_TOKEN", "") if provider == "cloudflare" else "")
+            key_masked = f"{saved_key[:4]}...{saved_key[-4:]}" if len(saved_key) > 8 else ("Configurada" if saved_key else "Não configurada")
+            api_key = Prompt.ask(
+                f"Digite a API KEY / Token para {provider.upper()} (Atual: {key_masked}, Enter para manter)",
+                password=True,
+                default=saved_key
+            )
+            if api_key:
+                db.set_provider_api_key(provider, api_key)
+                
+            base_url = ""
+            if provider == "custom":
+                current_url = db.get_setting("backup_provider_base_url" if is_backup else "provider_base_url", "")
+                base_url = Prompt.ask("Digite a URL base do provedor customizado", default=current_url)
+            elif provider == "cloudflare":
+                current_acc = db.get_setting("backup_provider_base_url" if is_backup else "provider_base_url", "") or os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+                base_url = Prompt.ask("Digite o Account ID do Cloudflare", default=current_acc)
+                
+            sugestoes = {
+                "openai": ["gpt-4o", "gpt-4o-mini", "o1-mini", "o1-preview"],
+                "gemini": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"],
+                "claude": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+                "deepseek": ["deepseek-chat", "deepseek-coder"],
+                "qwen": ["qwen-turbo", "qwen-plus", "qwen-max"],
+                "kimi": ["moonshot-v1-8k", "moonshot-v1-32k"],
+                "cloudflare": ["@cf/qwen/qwen3-30b-a3b-fp8", "@cf/meta/llama-3.1-8b-instruct", "@cf/meta/llama-3.1-70b-instruct"],
+                "custom": []
+            }
+            modelos_sug = sugestoes.get(provider, [])
+            if modelos_sug:
+                table = Table(title=f"Modelos Recomendados para {provider.upper()}")
+                table.add_column("Índice", justify="center", style="cyan")
+                table.add_column("Identificador do Modelo", style="magenta")
+                for idx, mod in enumerate(modelos_sug, 1):
+                    table.add_row(str(idx), mod)
+                table.add_row(str(len(modelos_sug) + 1), "Outro / Digitar personalizado")
+                console.print(table)
+                
+                model_sel = Prompt.ask("Escolha o índice do modelo desejado", default="1")
+                if model_sel.isdigit():
+                    idx_sel = int(model_sel) - 1
+                    if 0 <= idx_sel < len(modelos_sug):
+                        chosen_model = modelos_sug[idx_sel]
+                    else:
+                        chosen_model = Prompt.ask("Digite o identificador do modelo completo")
+                else:
+                    chosen_model = Prompt.ask("Digite o identificador do modelo completo")
+            else:
+                chosen_model = Prompt.ask("Digite o identificador do modelo a ser utilizado")
+                
+            if chosen_model:
+                if is_backup:
+                    db.set_backup_llm_config(
+                        enabled=True,
+                        provider=provider,
+                        model=chosen_model,
+                        api_key=api_key or saved_key,
+                        base_url=base_url
+                    )
+                    console.print(f"[bold green][SUCESSO][/bold green] LLM de Backup configurado e ativado: [yellow]{provider.upper()}[/yellow] - [yellow]{chosen_model}[/yellow].")
+                else:
+                    db.set_setting("llm_provider", provider)
+                    db.set_setting("provider_api_key", api_key or saved_key)
+                    if base_url:
+                        db.set_setting("provider_base_url", base_url)
+                    db.set_setting("active_model", chosen_model)
+                    console.print(f"[bold green][SUCESSO][/bold green] LLM Principal configurado: [yellow]{provider.upper()}[/yellow] - [yellow]{chosen_model}[/yellow].")
+
+        backup_cfg = db.get_backup_llm_config()
+        b_status_str = "[bold green]ATIVO[/bold green]" if (backup_cfg["enabled"] and backup_cfg["provider"]) else "[bold red]INATIVO[/bold red]"
+        b_info_str = f"({backup_cfg['provider'].upper()} - {backup_cfg['model']})" if (backup_cfg["enabled"] and backup_cfg["provider"]) else ""
+        
         console.print(Panel(
-            "[bold cyan]Escolha o Provedor de LLM:[/bold cyan]\n\n"
-            "1. [green]LM Studio[/green] (Local)\n"
-            "2. [green]OpenAI[/green]\n"
-            "3. [green]Google Gemini[/green]\n"
-            "4. [green]Anthropic Claude[/green]\n"
-            "5. [green]DeepSeek[/green]\n"
-            "6. [green]Alibaba Qwen[/green]\n"
-            "7. [green]Moonshot Kimi[/green]\n"
-            "8. [green]Personalizado[/green] (OpenAI-Compatible)",
-            title="Configuração de Modelos"
+            f"[bold cyan]Gerenciamento de Modelos de Linguagem (LLM):[/bold cyan]\n\n"
+            f"1. [green]Configurar LLM Principal[/green] (Atual: [yellow]{db.get_setting('llm_provider', 'lm_studio').upper()}[/yellow] - [yellow]{db.get_setting('active_model', 'Nenhum')}[/yellow])\n"
+            f"2. [green]Configurar LLM de Backup[/green] (Atual: {b_status_str} {b_info_str})\n"
+            f"3. [green]Alternar LLM de Backup (Ligar / Desligar)[/green]\n"
+            f"4. [green]Testar Conexão dos Modelos (Principal e Backup)[/green]\n"
+            f"5. [green]Voltar[/green]",
+            title="Configuração de Modelos e Resiliência"
         ))
         
-        current_provider = db.get_setting("llm_provider", "lm_studio")
-        active_model = db.get_setting("active_model", "Nenhum")
-        console.print(f"Provedor atual: [yellow]{current_provider}[/yellow] | Modelo atual: [yellow]{active_model}[/yellow]")
-        
-        provider_sel = Prompt.ask("Digite o número do provedor desejado (ou Enter para manter o atual)", default="")
-        
-        # Mapeia seleção
-        providers_map = {
-            "1": "lm_studio",
-            "2": "openai",
-            "3": "gemini",
-            "4": "claude",
-            "5": "deepseek",
-            "6": "qwen",
-            "7": "kimi",
-            "8": "custom"
-        }
-        
-        provider = providers_map.get(provider_sel, current_provider)
-        
-        if provider == "lm_studio":
-            # Mantém fluxo original do LM Studio
-            models = llm.get_available_models()
-            if not models:
-                console.print("[red]Nenhum modelo detectado no LM Studio. Certifique-se de que o LM Studio está rodando e com o modelo carregado.[/red]")
-                return True
-                
-            active = db.get_setting("active_model")
-            table = Table(title="Modelos Disponíveis no LM Studio")
-            table.add_column("Índice", justify="center", style="cyan")
-            table.add_column("Nome do Modelo", style="magenta")
-            table.add_column("Status", justify="center", style="green")
+        menu_choice = Prompt.ask("Escolha uma opção (1-5)", default="1")
+        if menu_choice == "1":
+            _configure_provider(is_backup=False)
+        elif menu_choice == "2":
+            _configure_provider(is_backup=True)
+        elif menu_choice == "3":
+            new_state = not backup_cfg.get("enabled", False)
+            db.set_backup_llm_config(enabled=new_state)
+            state_label = "[bold green]ATIVADO[/bold green]" if new_state else "[bold red]DESATIVADO[/bold red]"
+            console.print(f"[bold cyan]LLM de Backup agora está:[/bold cyan] {state_label}")
+        elif menu_choice == "4":
+            console.print("[bold cyan]Testando conexões com os LLMs...[/bold cyan]")
+            p_conn = llm.test_provider_connection("primary")
+            p_str = "[bold green]Conectado com sucesso[/bold green]" if p_conn else "[bold red]Falha na conexão[/bold red]"
+            console.print(f"- LLM Principal ({db.get_setting('llm_provider', 'lm_studio').upper()}): {p_str}")
             
-            for idx, m in enumerate(models, 1):
-                status = "[bold green]Ativo[/bold green]" if m == active else ""
-                table.add_row(str(idx), m, status)
-                
-            console.print(table)
-            
-            selection = Prompt.ask("Digite o índice do modelo que deseja ativar (ou pressione Enter para manter o atual)", default="")
-            if selection.isdigit():
-                idx = int(selection) - 1
-                if 0 <= idx < len(models):
-                    db.set_setting("llm_provider", "lm_studio")
-                    db.set_setting("active_model", models[idx])
-                    console.print(f"[bold green]Provedor alterado para LM Studio e modelo ativo para:[/bold green] {models[idx]}")
-                else:
-                    console.print("[red]Índice inválido.[/red]")
-            return True
-            
-        # Configurações para Provedores Externos
-        db.set_setting("llm_provider", provider)
-        
-        # 2. Chave de API
-        current_key = db.get_setting("provider_api_key", "")
-        key_masked = f"{current_key[:4]}...{current_key[-4:]}" if len(current_key) > 8 else "Não configurada"
-        
-        api_key = Prompt.ask(
-            f"Digite a API KEY para o provedor {provider} (Atual: {key_masked}, Enter para manter)", 
-            password=True, 
-            default=current_key
-        )
-        if api_key:
-            db.set_setting("provider_api_key", api_key)
-            
-        # 3. Base URL (para o caso Customizado)
-        if provider == "custom":
-            current_url = db.get_setting("provider_base_url", "")
-            base_url = Prompt.ask(
-                f"Digite a URL base do provedor customizado (ex: http://localhost:8000/v1)", 
-                default=current_url
-            )
-            if base_url:
-                db.set_setting("provider_base_url", base_url)
-                
-        # 4. Seleção de Modelos Sugeridos
-        sugestoes = {
-            "openai": ["gpt-4o", "gpt-4o-mini", "o1-mini", "o1-preview"],
-            "gemini": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"],
-            "claude": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
-            "deepseek": ["deepseek-chat", "deepseek-coder"],
-            "qwen": ["qwen-turbo", "qwen-plus", "qwen-max"],
-            "kimi": ["moonshot-v1-8k", "moonshot-v1-32k"],
-            "custom": []
-        }
-        
-        modelos_sugeridos = sugestoes.get(provider, [])
-        
-        if modelos_sugeridos:
-            table = Table(title=f"Modelos Recomendados para {provider.upper()}")
-            table.add_column("Índice", justify="center", style="cyan")
-            table.add_column("Identificador do Modelo", style="magenta")
-            
-            for idx, mod in enumerate(modelos_sugeridos, 1):
-                table.add_row(str(idx), mod)
-            table.add_row(str(len(modelos_sugeridos) + 1), "Outro / Digitar modelo personalizado")
-            
-            console.print(table)
-            
-            model_sel = Prompt.ask("Escolha o índice do modelo desejado", default="1")
-            
-            if model_sel.isdigit():
-                idx_sel = int(model_sel) - 1
-                if 0 <= idx_sel < len(modelos_sugeridos):
-                    chosen_model = modelos_sugeridos[idx_sel]
-                else:
-                    chosen_model = Prompt.ask("Digite o identificador do modelo completo (ex: gpt-3.5-turbo)")
+            b_cfg = db.get_backup_llm_config()
+            if b_cfg["provider"]:
+                b_conn = llm.test_backup_provider_connection()
+                b_str = "[bold green]Conectado com sucesso[/bold green]" if b_conn else "[bold red]Falha na conexão[/bold red]"
+                console.print(f"- LLM de Backup ({b_cfg['provider'].upper()}): {b_str}")
             else:
-                chosen_model = Prompt.ask("Digite o identificador do modelo completo (ex: gpt-3.5-turbo)")
-        else:
-            # Custom ou outro sem sugestões
-            chosen_model = Prompt.ask("Digite o identificador do modelo a ser utilizado")
-            
-        if chosen_model:
-            db.set_setting("active_model", chosen_model)
-            console.print(f"[bold green][SUCESSO][/bold green] Provedor alterado para [yellow]{provider}[/yellow] e modelo ativo para [yellow]{chosen_model}[/yellow].")
+                console.print("- LLM de Backup: [yellow]Nenhum provedor configurado como backup.[/yellow]")
                 
     elif command == "/safe":
         security.set_safe_mode(True)

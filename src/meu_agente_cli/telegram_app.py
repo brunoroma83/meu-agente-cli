@@ -221,8 +221,11 @@ def parse_financial_intent(text: str) -> dict:
 TELEGRAM_INSTRUCTION = (
     "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Se for responder diretamente "
     "ao usuário em texto, formate com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII "
-    "ou caixas unicode complexas. Se você precisar acionar uma ferramenta (como tts_tool, finance_tool, etc.), "
+    "ou caixas unicode complexas. Se você precisar acionar uma ferramenta (como google_calendar_tool, gmail_tool, mcp_crm_list_tasks, mcp_crm_list_clients, tts_tool, finance_tool, etc.), "
     "responda EXCLUSIVAMENTE com o bloco JSON da ferramenta, sem texto adicional de conversa. "
+    "NUNCA invente, presuma ou responda sobre compromissos ou eventos da agenda sem antes ter acionado o JSON da google_calendar_tool e analisado os dados reais retornados! "
+    "NUNCA invente, presuma ou responda sobre e-mails sem antes ter acionado o JSON da gmail_tool! "
+    "NUNCA invente, presuma ou liste tarefas, clientes ou dados do CRM em texto sem antes ter acionado a respectiva ferramenta MCP (ex: mcp_crm_list_tasks)! "
     "NUNCA simule em texto mensagens que afirmam que um áudio foi gerado sem ter acionado o JSON da tts_tool! "
     "NUNCA simule ou responda em texto que uma despesa, receita ou compra em cartão foi gravada/registrada sem ter acionado o JSON da finance_tool e recebido o retorno [SUCCESS]!]"
 )
@@ -872,26 +875,113 @@ def handle_models_command(message, parts):
     if len(parts) == 1:
         llm_provider = db.get_setting("llm_provider", "lm_studio")
         active_model = db.get_setting("active_model", "Nenhum")
+        backup_cfg = db.get_backup_llm_config()
+        
+        b_status = "✅ *ATIVADO*" if (backup_cfg["enabled"] and backup_cfg["provider"]) else "❌ *DESATIVADO*"
+        b_desc = f" ({backup_cfg['provider'].upper()} - `{backup_cfg['model']}`)" if (backup_cfg["enabled"] and backup_cfg["provider"]) else ""
         
         linhas = [
             "🤖 *Configuração do Modelo de Linguagem (LLM)*",
-            f"• Provedor atual: *{llm_provider.upper()}*",
-            f"• Modelo atual: *{active_model}*\n",
-            "💡 *Como alterar o modelo via Telegram:*",
-            "1️⃣ *LM Studio (Local)*:",
-            "   └─ Digite `/models lm_studio` para ver os modelos carregados localmente.",
-            "   └─ Digite `/models lm_studio <nome_do_modelo>` para ativar.",
-            "",
-            "2️⃣ *Provedores Externos*:",
-            "   └─ Digite `/models <provedor> <API_KEY> [modelo]`",
-            "   └─ *Provedores suportados:* `openai`, `gemini`, `claude`, `deepseek`, `qwen`, `kimi`",
-            "   └─ *Exemplo:* `/models openai sk-proj-... gpt-4o-mini`",
-            "",
-            "3️⃣ *Provedor Personalizado (OpenAI-Compatible)*:",
-            "   └─ Digite `/models custom <API_KEY> <URL_BASE> <modelo>`",
-            "   └─ *Exemplo:* `/models custom sk-key http://192.168.1.50:8000/v1 meu-modelo-lhamas`"
+            f"• Provedor Principal: *{llm_provider.upper()}*",
+            f"• Modelo Principal: *{active_model}*",
+            f"• LLM de Backup: {b_status}{b_desc}\n",
+            "💡 *Configurar LLM Principal:*",
+            "• `/models lm_studio [modelo]`",
+            "• `/models <openai|gemini|claude|deepseek|qwen|kimi> <API_KEY> [modelo]`",
+            "• `/models custom <API_KEY> <URL_BASE> <modelo>`\n",
+            "🛡️ *Configurar LLM de Backup (Failover):*",
+            "• `/models backup <provedor> <API_KEY> [modelo]`",
+            "• `/models backup off` (desativa failover)",
+            "• `/models backup on` (ativa failover)",
+            "• `/models test` (testa conexão do Principal e Backup)"
         ]
         bot.reply_to(message, "\n".join(linhas), parse_mode="Markdown")
+        return
+        
+    provider = parts[1].lower()
+    
+    if provider == "test":
+        from meu_agente_cli import llm
+        p_prov = db.get_setting("llm_provider", "lm_studio").upper()
+        p_ok = llm.test_provider_connection("primary")
+        p_txt = "✅ Conectado" if p_ok else "❌ Desconectado / Falha"
+        
+        b_cfg = db.get_backup_llm_config()
+        if b_cfg["provider"]:
+            b_ok = llm.test_backup_provider_connection()
+            b_txt = "✅ Conectado" if b_ok else "❌ Desconectado / Falha"
+            b_str = f"• Backup ({b_cfg['provider'].upper()}): {b_txt}"
+        else:
+            b_str = "• Backup: Nenhum configurado"
+            
+        bot.reply_to(message, f"📡 *Status das Conexões LLM:*\n• Principal ({p_prov}): {p_txt}\n{b_str}", parse_mode="Markdown")
+        return
+        
+    if provider == "backup":
+        if len(parts) == 2:
+            b_cfg = db.get_backup_llm_config()
+            status = "ATIVADO" if b_cfg["enabled"] else "DESATIVADO"
+            bot.reply_to(message, f"🛡️ *LLM de Backup:* {status}\nProvedor: `{b_cfg['provider'] or 'Nenhum'}`\nModelo: `{b_cfg['model'] or 'Nenhum'}`\n\nUso: `/models backup <provedor> <API_KEY> [modelo]` ou `/models backup on/off`", parse_mode="Markdown")
+            return
+            
+        sub = parts[2].lower()
+        if sub in ["off", "desativar", "disable"]:
+            db.set_backup_llm_config(enabled=False)
+            bot.reply_to(message, "❌ LLM de Backup *DESATIVADO*.", parse_mode="Markdown")
+            return
+        elif sub in ["on", "ativar", "enable"]:
+            db.set_backup_llm_config(enabled=True)
+            bot.reply_to(message, "✅ LLM de Backup *ATIVADO*.", parse_mode="Markdown")
+            return
+            
+        b_prov = sub
+        default_models = {
+            "openai": "gpt-4o-mini",
+            "gemini": "gemini-1.5-flash",
+            "claude": "claude-3-5-sonnet-latest",
+            "deepseek": "deepseek-chat",
+            "qwen": "qwen-plus",
+            "kimi": "moonshot-v1-8k",
+            "lm_studio": "google/gemma-4-31b-qat"
+        }
+        
+        if b_prov == "lm_studio":
+            model_name = " ".join(parts[3:]) if len(parts) > 3 else "default"
+            db.set_backup_llm_config(enabled=True, provider="lm_studio", model=model_name, api_key="", base_url="")
+            bot.reply_to(message, f"✅ LLM de Backup configurado para *LM Studio* (`{model_name}`).", parse_mode="Markdown")
+            return
+            
+        if b_prov in ["openai", "gemini", "claude", "deepseek", "qwen", "kimi"]:
+            if len(parts) < 4:
+                bot.reply_to(message, f"❌ Uso correto: `/models backup {b_prov} <API_KEY> [modelo]`")
+                return
+            b_key = parts[3]
+            b_model = parts[4] if len(parts) > 4 else default_models.get(b_prov, "")
+            db.set_backup_llm_config(enabled=True, provider=b_prov, model=b_model, api_key=b_key)
+            db.set_provider_api_key(b_prov, b_key)
+            bot.reply_to(message, f"✅ LLM de Backup configurado e ativado!\n• Provedor: *{b_prov.upper()}*\n• Modelo: `{b_model}`", parse_mode="Markdown")
+            return
+            
+        if b_prov == "cloudflare":
+            b_key = parts[3] if len(parts) > 3 and parts[3].lower() != "env" else os.environ.get("CLOUDFLARE_API_TOKEN", "")
+            b_acc = parts[4] if len(parts) > 4 and parts[4].lower() != "env" else os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+            b_model = parts[5] if len(parts) > 5 else "@cf/qwen/qwen3-30b-a3b-fp8"
+            db.set_backup_llm_config(enabled=True, provider="cloudflare", model=b_model, api_key=b_key, base_url=b_acc)
+            bot.reply_to(message, f"✅ LLM de Backup configurado para *Cloudflare Workers AI*!\n• Modelo: `{b_model}`", parse_mode="Markdown")
+            return
+
+        if b_prov == "custom":
+            if len(parts) < 6:
+                bot.reply_to(message, "❌ Uso correto: `/models backup custom <API_KEY> <URL_BASE> <modelo>`")
+                return
+            b_key = "" if parts[3].lower() == "none" else parts[3]
+            b_url = parts[4]
+            b_model = " ".join(parts[5:])
+            db.set_backup_llm_config(enabled=True, provider="custom", model=b_model, api_key=b_key, base_url=b_url)
+            bot.reply_to(message, f"✅ LLM de Backup CUSTOM configurado e ativado!\n• URL: `{b_url}`\n• Modelo: `{b_model}`", parse_mode="Markdown")
+            return
+            
+        bot.reply_to(message, "❌ Provedor de backup desconhecido. Use: `openai`, `gemini`, `claude`, `deepseek`, `qwen`, `kimi`, `cloudflare`, `lm_studio`, `custom`.")
         return
         
     provider = parts[1].lower()

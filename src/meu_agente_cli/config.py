@@ -21,7 +21,12 @@ DEFAULT_SETTINGS = {
     "db_port": 5432,
     "telegram_bot_token": "",
     "telegram_authorized_user_ids": "",
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "backup_llm_enabled": False,
+    "backup_llm_provider": None,
+    "backup_active_model": None,
+    "backup_provider_api_key": "",
+    "backup_provider_base_url": ""
 }
 
 def get_wsl_host_ip() -> str:

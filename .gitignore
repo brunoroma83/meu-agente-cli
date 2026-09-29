@@ -9,6 +9,7 @@ backups/
 uploads/
 .env
 src/meu_agente_cli/custom_tools/estudos_acoes/
+credentials.json
 
 # Virtual environments
 .venv

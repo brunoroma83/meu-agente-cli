@@ -1,12 +1,19 @@
 FROM python:3.11-slim
 
-# Instala dependências do sistema para o psycopg, criptografia, pyaudio e conversão de áudio (ffmpeg)
+# Instala dependências do sistema para o psycopg, criptografia, pyaudio, conversão de áudio (ffmpeg) e Google Cloud CLI (gcloud)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     curl \
     portaudio19-dev \
     ffmpeg \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /etc/apt/keyrings/cloud.google.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee /etc/apt/sources.list.d/google-cloud-sdk.list \
+    && apt-get update && apt-get install -y --no-install-recommends google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # Instala o gerenciador uv de dependências do Python

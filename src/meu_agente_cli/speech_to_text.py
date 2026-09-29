@@ -1,6 +1,8 @@
 # speech-to-text tool
-
+from tqdm import tqdm
 import speech_recognition as sr
+import subprocess
+from pathlib import Path
 
 def listen(self=None):
     r = sr.Recognizer()
@@ -23,9 +25,6 @@ def transcrever_audio(audio):
     except sr.RequestError as e:
         print(f"Não foi possível obter resultados do serviço Google Speech Recognition; {e}")
         return ""
-
-import subprocess
-from pathlib import Path
 
 def transcrever_arquivo_audio(file_path: str) -> str:
     """
@@ -71,24 +70,28 @@ def transcrever_arquivo_audio(file_path: str) -> str:
             
             # Se o áudio for curto (até 60s), lê tudo de uma vez
             if duration <= 60:
+                print("Áudio curto, transcrevendo...")
                 audio_data = r.record(source)
                 text = r.recognize_google(audio_data, language="pt-BR")
                 return text
                 
-            # Áudio longo: transcrever em pedaços de 45 segundos para evitar erros de timeout e tamanho
-            chunk_size = 45
+            # Áudio longo: transcrever em pedaços de 300 segundos para evitar erros de timeout e tamanho
+            chunk_size = 300
             text_chunks = []
-            
-            for i, offset in enumerate(range(0, int(duration), chunk_size)):
-                audio_data = r.record(source, duration=chunk_size)
-                try:
-                    text = r.recognize_google(audio_data, language="pt-BR")
-                    if text.strip():
-                        text_chunks.append(text)
-                except sr.UnknownValueError:
-                    pass
-                except sr.RequestError as e:
-                    print(f"Erro no serviço de reconhecimento no bloco {i+1}: {e}")
+            print("Áudio longo, transcrevendo...")
+            with tqdm(total=int(duration), desc="Transcrevendo", unit="s") as pbar:
+                for i, offset in enumerate(range(0, int(duration), chunk_size)):
+                    step = min(chunk_size, int(duration) - offset)
+                    audio_data = r.record(source, duration=chunk_size)
+                    try:
+                        text = r.recognize_google(audio_data, language="pt-BR")
+                        if text.strip():
+                            text_chunks.append(text)
+                    except sr.UnknownValueError:
+                        pass
+                    except sr.RequestError as e:
+                        print(f"Erro no serviço de reconhecimento no bloco {i+1}: {e}")
+                    pbar.update(step)
                     
             return " ".join(text_chunks)
             

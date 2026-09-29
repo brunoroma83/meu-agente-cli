@@ -11,6 +11,7 @@ import meu_agente_cli.db as db
 import meu_agente_cli.llm as llm
 import meu_agente_cli.tools as tools
 import meu_agente_cli.security as security
+import logging
 
 def render_agent_response(content: str) -> Group:
     """Combina o cabeçalho com nome e ícone do agente ativo com o conteúdo em Markdown."""
@@ -123,6 +124,16 @@ def process_agent_turn(user_input: str, console: Console) -> None:
     Executa um turno completo de pensamento do agente.
     Monta histórico, interage com LLM, trata ferramentas e exibe streaming.
     """
+    def on_failover(p_prov, p_mod, b_prov, b_mod, reason):
+        console.print(Panel(
+            f"[bold yellow]⚠️ FALHA NO LLM PRINCIPAL:[/bold yellow]\n"
+            f"O provedor [bold cyan]{p_prov.upper()}[/bold cyan] ({p_mod}) falhou:\n[red]{reason}[/red]\n\n"
+            f"🔄 [bold green]Acionando LLM de Backup:[/bold green] [bold cyan]{b_prov.upper()}[/bold cyan] ({b_mod})...",
+            title="Failover Automático de LLM",
+            border_style="yellow"
+        ))
+    llm.set_failover_callback(on_failover)
+
     model = db.get_setting("active_model", "google/gemma-4-31b-qat")
     
     # Carrega histórico recente usando o limite configurado (padrão: 4)
@@ -276,6 +287,10 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
             return tools.manage_agents_tool(**args)
         elif tool_name == "transcribe_audio_tool":
             return tools.transcribe_audio_tool(**args)
+        elif tool_name == "manage_mcp_tool":
+            return tools.manage_mcp_tool(**args)
+        elif tool_name.startswith("mcp_"):
+            return tools.execute_mcp_tool(tool_name, args)
         else:
             # Tenta carregar a ferramenta dinamicamente do custom_tools.json
             from pathlib import Path
@@ -346,6 +361,7 @@ def process_agent_turn_silent(user_input: Any, use_sys_prompt: bool = True, use_
             
         tool_name = tool_call.get("tool")
         args = tool_call.get("args", {})
+        logging.info("Agente acionou ferramenta '%s' com args: %s", tool_name, args)
 
         # Trava anti-loop: se a mesma ferramenta já foi executada neste turno
         if tool_name in executed_tools and tool_name in ("tts_tool", "manage_agents_tool"):
@@ -370,6 +386,7 @@ def process_agent_turn_silent(user_input: Any, use_sys_prompt: bool = True, use_
         
         # Executa a ferramenta de forma não-interativa (allow_interactive=False)
         tool_result = execute_tool_by_name(tool_name, args, silent_console, allow_interactive=False)
+        logging.info("Resultado de '%s': %s", tool_name, str(tool_result)[:300])
         executed_tools.append(tool_name)
         executed_results[tool_name] = tool_result
         executed_args[tool_name] = args

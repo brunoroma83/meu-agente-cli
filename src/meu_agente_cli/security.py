@@ -6,7 +6,7 @@ from typing import Tuple
 from meu_agente_cli.db import get_connection
 
 # Conjunto de executáveis considerados seguros por padrão
-SAFE_EXECUTABLES = {"ls", "pwd", "date", "whoami", "uptime", "free", "df", "uname", "echo", "cat"}
+SAFE_EXECUTABLES = {"ls", "pwd", "date", "whoami", "uptime", "free", "df", "uname", "echo", "cat", "gcloud"}
 
 def calculate_signature(commands: list, password_hash: str) -> str:
     """Calcula uma assinatura hash auxiliar dos comandos (usada apenas como fallback)."""
