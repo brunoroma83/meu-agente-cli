@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard Financeiro{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Top Filter Bar -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-900 p-4 rounded-xl border border-slate-800">
+        <div>
+            <h1 class="text-xl font-bold text-white flex items-center space-x-2">
+                <span>Visão Geral</span>
+                {% if active_user_filter %}
+                <span class="text-sm font-normal px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                    Titular: {{ active_user_filter.capitalize() }}
+                </span>
+                {% else %}
+                <span class="text-sm font-normal px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+                    Visão Familiar Consolidada
+                </span>
+                {% endif %}
+            </h1>
+            <p class="text-xs text-slate-400">Acompanhamento em tempo real de receitas, contas, cartões e teto diário.</p>
+        </div>
+
+        <form method="GET" action="/dashboard" class="flex items-center space-x-2">
+            <input type="hidden" name="user_name" value="{{ active_user_filter or '' }}">
+            <input type="month" name="mes_ano" value="{{ mes_ano_input }}" onchange="this.form.submit()"
+                   class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </form>
+    </div>
+
+    <!-- KPI Cards Grid -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- Receitas -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm relative overflow-hidden">
+            <div class="flex justify-between items-start">
+                <div>
+                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Receitas do Mês</p>
+                    <h3 class="text-2xl font-bold text-emerald-400 mt-1">R$ {{ "%.2f"|format(summary.receitas) }}</h3>
+                </div>
+                <span class="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20 text-lg">💰</span>
+            </div>
+            <div class="mt-3 text-xs text-slate-400">Lançamentos confirmados</div>
+        </div>
+
+        <!-- Despesas -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm relative overflow-hidden">
+            <div class="flex justify-between items-start">
+                <div>
+                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total de Despesas</p>
+                    <h3 class="text-2xl font-bold text-rose-400 mt-1">R$ {{ "%.2f"|format(summary.despesas) }}</h3>
+                </div>
+                <span class="p-2.5 bg-rose-500/10 text-rose-400 rounded-xl border border-rose-500/20 text-lg">📉</span>
+            </div>
+            <div class="mt-3 text-xs text-slate-400">Fixas, cartões e despesas diárias</div>
+        </div>
+
+        <!-- Saldo Líquido -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm relative overflow-hidden">
+            <div class="flex justify-between items-start">
+                <div>
+                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Saldo Líquido</p>
+                    <h3 class="text-2xl font-bold {% if summary.saldo >= 0 %}text-sky-400{% else %}text-amber-400{% endif %} mt-1">
+                        R$ {{ "%.2f"|format(summary.saldo) }}
+                    </h3>
+                </div>
+                <span class="p-2.5 bg-sky-500/10 text-sky-400 rounded-xl border border-sky-500/20 text-lg">⚖️</span>
+            </div>
+            <div class="mt-3 text-xs text-slate-400">Receitas menos despesas</div>
+        </div>
+
+        <!-- Orçamento / Teto Diário -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm relative overflow-hidden">
+            <div class="flex justify-between items-start">
+                <div>
+                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Teto Recomendado Hoje</p>
+                    <h3 class="text-2xl font-bold text-indigo-400 mt-1">R$ {{ "%.2f"|format(budget.teto_diario) }}</h3>
+                </div>
+                <span class="p-2.5 bg-indigo-500/10 text-indigo-400 rounded-xl border border-indigo-500/20 text-lg">🎯</span>
+            </div>
+            <div class="mt-3 text-xs text-slate-400">
+                Gasto hoje: <span class="font-semibold text-slate-200">R$ {{ "%.2f"|format(budget.gasto_hoje) }}</span> ({{ budget.dias_restantes }} dias restantes)
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Donut Chart: Categorias -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm lg:col-span-1">
+            <h3 class="text-sm font-semibold text-white mb-4 flex items-center justify-between">
+                <span>Despesas por Categoria</span>
+                <span class="text-xs text-slate-400 font-normal">{{ mes_ano_input }}</span>
+            </h3>
+            <div class="relative h-64 flex items-center justify-center">
+                <canvas id="categoryDonutChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Bar Chart: Evolução 12 Meses -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm lg:col-span-2">
+            <h3 class="text-sm font-semibold text-white mb-4 flex items-center justify-between">
+                <span>Evolução Mensal (Receitas vs Despesas)</span>
+                <span class="text-xs text-slate-400 font-normal">Ano {{ current_year }}</span>
+            </h3>
+            <div class="relative h-64">
+                <canvas id="monthlyHistoryChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contas Fixas do Mês Preview -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-semibold text-white">Contas e Faturas deste Mês</h3>
+            <a href="/contas?user_name={{ active_user_filter or '' }}" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium">Ver todas as contas &rarr;</a>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs text-slate-300">
+                <thead class="bg-slate-950 text-slate-400 uppercase tracking-wider text-[11px] border-b border-slate-800">
+                    <tr>
+                        <th class="py-2.5 px-3">Status</th>
+                        <th class="py-2.5 px-3">Vencimento</th>
+                        <th class="py-2.5 px-3">Descrição</th>
+                        <th class="py-2.5 px-3">Titular</th>
+                        <th class="py-2.5 px-3 text-right">Valor</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 font-mono">
+                    {% for b in monthly_bills[:6] %}
+                    <tr class="hover:bg-slate-800/30 transition">
+                        <td class="py-2.5 px-3">
+                            {% if b.is_paid %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Pago</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">Pendente</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-2.5 px-3 text-slate-400">
+                            {{ b.due_date.strftime('%d/%m/%Y') if b.due_date and b.due_date.strftime else (b.due_date or '-') }}
+                        </td>
+                        <td class="py-2.5 px-3 font-sans font-medium text-slate-200">
+                            {{ b.name }}
+                        </td>
+                        <td class="py-2.5 px-3">
+                            <span class="px-1.5 py-0.5 rounded text-[10px] {% if b.user_name == 'bruno' %}bg-blue-500/10 text-blue-400 border border-blue-500/20{% else %}bg-purple-500/10 text-purple-400 border border-purple-500/20{% endif %}">
+                                {{ b.user_name.capitalize() if b.user_name else 'Bruno' }}
+                            </span>
+                        </td>
+                        <td class="py-2.5 px-3 text-right font-bold {% if b.is_paid %}text-slate-400{% else %}text-white{% endif %}">
+                            R$ {{ "%.2f"|format(b.amount) }}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="py-4 text-center text-slate-500 font-sans">Nenhuma conta cadastrada para este mês.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Gráfico de Rosca: Categorias
+    const catData = {{ categories_data | tojson }};
+    const catLabels = Object.keys(catData);
+    const catValues = Object.values(catData);
+
+    const ctxDonut = document.getElementById('categoryDonutChart');
+    if (ctxDonut) {
+        new Chart(ctxDonut, {
+            type: 'doughnut',
+            data: {
+                labels: catLabels.length ? catLabels : ['Sem despesas'],
+                datasets: [{
+                    data: catValues.length ? catValues : [1],
+                    backgroundColor: [
+                        '#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#8b5cf6',
+                        '#3b82f6', '#10b981', '#f43f5e', '#06b6d4', '#64748b'
+                    ],
+                    borderWidth: 1,
+                    borderColor: '#0f172a'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 10 } } }
+                }
+            }
+        });
+    }
+
+    // Gráfico de Barras: 12 Meses
+    const historyData = {{ monthly_history | tojson }};
+    const ctxBar = document.getElementById('monthlyHistoryChart');
+    if (ctxBar) {
+        new Chart(ctxBar, {
+            type: 'bar',
+            data: {
+                labels: historyData.map(d => d.mes_label),
+                datasets: [
+                    {
+                        label: 'Receitas',
+                        data: historyData.map(d => d.receitas),
+                        backgroundColor: '#10b981',
+                        borderRadius: 4
+                    },
+                    {
+                        label: 'Despesas',
+                        data: historyData.map(d => d.despesas),
+                        backgroundColor: '#f43f5e',
+                        borderRadius: 4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 10 } } },
+                    y: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8', font: { size: 10 } } }
+                },
+                plugins: {
+                    legend: { position: 'top', labels: { color: '#94a3b8', font: { size: 11 } } }
+                }
+            }
+        });
+    }
+</script>
+{% endblock %}

@@ -10,10 +10,14 @@ from datetime import datetime, date
 from typing import List, Tuple, Dict, Any, Optional
 import psycopg
 from psycopg import Connection
-from croniter import croniter
-from meu_agente_cli.config import load_bootstrap_config, clean_string
+from dotenv import load_dotenv
 
-DB_NAME = os.environ.get("DB_NAME") or "meu_agente_cli"
+load_dotenv()
+
+from meu_agente_cli.config import load_bootstrap_config, clean_string
+from meu_agente_cli.security import hash_password, verify_password, generate_mcp_token, hash_token
+
+DB_NAME = os.environ.get("DB_NAME") or "meu_agente_db"
 
 def run_wsl_command(cmd_list: list) -> subprocess.CompletedProcess:
     """Executa um comando no WSL."""
@@ -58,6 +62,19 @@ def ensure_postgresql_service() -> bool:
     db_host = os.environ.get("DB_HOST") or cfg.get("db_host", "127.0.0.1")
     if db_host not in ("127.0.0.1", "localhost"):
         return True
+
+    # Se a porta já estiver aberta e respondendo (ex: Docker), não precisa mexer no WSL
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        db_port = int(os.environ.get("DB_PORT") or cfg.get("db_port", 5432))
+        if s.connect_ex((db_host, db_port)) == 0:
+            s.close()
+            return True
+        s.close()
+    except Exception:
+        pass
 
     if not is_postgresql_installed():
         success = install_postgresql()
@@ -449,8 +466,43 @@ def init_database() -> bool:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # 13. Tabela de Tokens MCP (Para comunicação do Hermes)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mcp_tokens (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    token_hash VARCHAR(64) UNIQUE NOT NULL,
+                    raw_token_prefix VARCHAR(20) NOT NULL,
+                    created_by VARCHAR(50) DEFAULT 'bruno',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    last_used_at TIMESTAMP
+                )
+            """)
+
+            # 14. Tabela de Auditoria e Logs de Acesso do MCP
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mcp_access_logs (
+                    id SERIAL PRIMARY KEY,
+                    token_id INTEGER REFERENCES mcp_tokens(id) ON DELETE SET NULL,
+                    token_name VARCHAR(100),
+                    client_ip VARCHAR(50),
+                    tool_name VARCHAR(100) NOT NULL,
+                    request_params TEXT,
+                    response_summary TEXT,
+                    status VARCHAR(20) DEFAULT 'success',
+                    error_message TEXT,
+                    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             
             # Migrations para bases de dados existentes
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user'")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
             cur.execute("ALTER TABLE user_notes ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
             cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS due_date DATE")
             cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
@@ -458,8 +510,14 @@ def init_database() -> bool:
             cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS card_name VARCHAR(100)")
             cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE")
             cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS payment_date DATE")
+            cur.execute("ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS user_name VARCHAR(50) DEFAULT 'bruno'")
+            cur.execute("ALTER TABLE recurring_bills ADD COLUMN IF NOT EXISTS user_name VARCHAR(50) DEFAULT 'bruno'")
             cur.execute("ALTER TABLE cron_jobs ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
             cur.execute("ALTER TABLE audio_transcriptions ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
+            
+            # Garante que registros sem usuário fiquem vinculados ao titular 'bruno'
+            cur.execute("UPDATE financial_records SET user_name = 'bruno' WHERE user_name IS NULL")
+            cur.execute("UPDATE recurring_bills SET user_name = 'bruno' WHERE user_name IS NULL")
             
             # Backfill inteligente de dados existentes (se ainda não categorizados)
             cur.execute("""
@@ -490,17 +548,11 @@ def init_database() -> bool:
         conn.commit()
         conn.close()
         
-        # Garante o cron job diário de alerta financeiro às 11:00 AM
+        # Garante os usuários padrão (Bruno e Fabiana)
         try:
-            ensure_daily_finance_cron()
-        except Exception as _cron_ex:
-            logging.warning("Não foi possível verificar/criar cron job diário financeiro: %s", _cron_ex)
-
-        # Garante os agentes padrão (geral e estudo)
-        try:
-            seed_default_agents()
-        except Exception as _agent_ex:
-            logging.warning("Não foi possível verificar/criar agentes padrão: %s", _agent_ex)
+            seed_default_users()
+        except Exception as _user_ex:
+            logging.warning("Não foi possível semear usuários padrão: %s", _user_ex)
 
         logging.info("Banco de dados inicializado com sucesso!")
         print("[SUCCESS] Banco de dados inicializado com sucesso!")
@@ -730,18 +782,19 @@ def delete_user_note(note_id: int) -> bool:
         return False
 
 # 4. Registros Financeiros (Financial Records)
-def add_financial_record(record_type: str, category: str, amount: float, description: str, due_date: Optional[str] = None) -> bool:
-    """Registra uma receita ou despesa com data de vencimento opcional."""
+def add_financial_record(record_type: str, category: str, amount: float, description: str, due_date: Optional[str] = None, user_name: str = "bruno") -> bool:
+    """Registra uma receita ou despesa com data de vencimento opcional e vínculo com usuário."""
     try:
         cat_clean = clean_string(category)
         desc_clean = clean_string(description)
+        u_name = clean_string(user_name).strip().lower() if user_name else "bruno"
         if not due_date:
             due_date = datetime.now().strftime("%Y-%m-%d")
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO financial_records (type, category, amount, description, due_date) VALUES (%s, %s, %s, %s, %s)",
-                (record_type, cat_clean, amount, desc_clean, due_date)
+                "INSERT INTO financial_records (type, category, amount, description, due_date, user_name) VALUES (%s, %s, %s, %s, %s, %s)",
+                (record_type, cat_clean, amount, desc_clean, due_date, u_name)
             )
         conn.commit()
         conn.close()
@@ -750,8 +803,8 @@ def add_financial_record(record_type: str, category: str, amount: float, descrip
         print(f"[ERROR] Erro ao registrar finanças: {e}", file=sys.stderr)
         return False
 
-def add_financial_records_bulk(items: List[Dict[str, Any]]) -> bool:
-    """Registra múltiplas transações financeiras de uma vez no banco com data de vencimento opcional."""
+def add_financial_records_bulk(items: List[Dict[str, Any]], default_user_name: str = "bruno") -> bool:
+    """Registra múltiplas transações financeiras de uma vez no banco com data de vencimento opcional e usuário."""
     try:
         conn = get_connection()
         with conn.cursor() as cur:
@@ -761,10 +814,11 @@ def add_financial_records_bulk(items: List[Dict[str, Any]]) -> bool:
                 amount = float(item.get("amount", 0.0))
                 description = clean_string(item.get("description", ""))
                 due_date = item.get("due_date", None)
+                u_name = clean_string(item.get("user_name", default_user_name)).strip().lower() or "bruno"
                 
                 cur.execute(
-                    "INSERT INTO financial_records (type, category, amount, description, due_date) VALUES (%s, %s, %s, %s, %s)",
-                    (r_type, category, amount, description, due_date)
+                    "INSERT INTO financial_records (type, category, amount, description, due_date, user_name) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (r_type, category, amount, description, due_date, u_name)
                 )
         conn.commit()
         conn.close()
@@ -773,19 +827,22 @@ def add_financial_records_bulk(items: List[Dict[str, Any]]) -> bool:
         print(f"[ERROR] Erro ao registrar finanças em lote: {e}", file=sys.stderr)
         return False
 
-def get_financial_records(limit: int = 50) -> List[Tuple[int, str, str, float, str, datetime, Optional[datetime]]]:
-    """Retorna os registros financeiros recentes que estejam ativos, incluindo data de vencimento."""
+def get_financial_records(limit: int = 50, user_name: Optional[str] = None) -> List[Tuple[int, str, str, float, str, datetime, Optional[datetime], str]]:
+    """Retorna os registros financeiros recentes que estejam ativos, incluindo data de vencimento e usuário."""
     try:
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, type, category, amount, description, date, due_date FROM financial_records WHERE active = TRUE ORDER BY id DESC LIMIT %s",
-                (limit,)
-            )
+            sql = "SELECT id, type, category, amount, description, date, due_date, user_name FROM financial_records WHERE active = TRUE"
+            params = []
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                sql += " AND LOWER(user_name) = %s"
+                params.append(user_name.strip().lower())
+            sql += " ORDER BY id DESC LIMIT %s"
+            params.append(limit)
+            cur.execute(sql, tuple(params))
             rows = cur.fetchall()
         conn.close()
-        # Retorna o valor float (convertido de decimal) e o due_date
-        return [(r[0], r[1], r[2], float(r[3]), r[4], r[5], r[6]) for r in rows]
+        return [(r[0], r[1], r[2], float(r[3]), r[4], r[5], r[6], r[7] or "bruno") for r in rows]
     except Exception as e:
         print(f"[ERROR] Erro ao buscar registros financeiros: {e}", file=sys.stderr)
         return []
@@ -815,24 +872,16 @@ def search_financial_records(
     end_date: Optional[str] = None,
     record_type: Optional[str] = None,
     category: Optional[str] = None,
-    order_asc: Optional[bool] = None
-) -> List[Tuple[int, str, str, float, str, datetime, Optional[datetime]]]:
+    order_asc: Optional[bool] = None,
+    user_name: Optional[str] = None
+) -> List[Tuple[int, str, str, float, str, datetime, Optional[datetime], str]]:
     """
-    Busca registros financeiros ativos aplicando filtros opcionais:
-    - limit: quantidade máxima de linhas (None para sem limite)
-    - month_year: formato 'MM-YYYY', filtra due_date naquele mês/ano
-    - query: termo de busca na categoria ou descrição (busca case-insensitive e sotaque-insensitive)
-    - due_date: data de vencimento específica (ex: 'YYYY-MM-DD' ou 'DD/MM/YYYY')
-    - start_due_date / start_date: data inicial do intervalo de vencimento
-    - end_due_date / end_date: data final do intervalo de vencimento
-    - record_type: 'receita' ou 'despesa'
-    - category: filtro por categoria
-    - order_asc: se True ordena por due_date ASC, id ASC; se False por id DESC; se None escolhe inteligentemente
+    Busca registros financeiros ativos aplicando filtros opcionais por período, termo, tipo e usuário.
     """
     try:
         conn = get_connection()
         with conn.cursor() as cur:
-            sql = "SELECT id, type, category, amount, description, date, due_date FROM financial_records"
+            sql = "SELECT id, type, category, amount, description, date, due_date, user_name FROM financial_records"
             conditions = ["active = TRUE"]
             params = []
             
@@ -868,6 +917,10 @@ def search_financial_records(
                 conditions.append("lower(type) = %s")
                 params.append(record_type.strip().lower())
 
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                conditions.append("LOWER(user_name) = %s")
+                params.append(user_name.strip().lower())
+
             if category:
                 cat_clean = f"%{clean_string(category)}%"
                 translate_cat_sql = (
@@ -879,7 +932,6 @@ def search_financial_records(
 
             if query:
                 q_clean = f"%{clean_string(query)}%"
-                # Usa TRANSLATE e LOWER para busca insensível a acentos e maiúsculas
                 translate_sql = (
                     "translate(lower(category), 'áàâãäéèêëíìîïóòôõöúùûüç', 'aaaaaeeeeiiiiooooouuuuc') ILIKE "
                     "translate(lower(%s), 'áàâãäéèêëíìîïóòôõöúùûüç', 'aaaaaeeeeiiiiooooouuuuc') "
@@ -906,20 +958,33 @@ def search_financial_records(
             rows = cur.fetchall()
             
         conn.close()
-        return [(r[0], r[1], r[2], float(r[3]), r[4], r[5], r[6]) for r in rows]
+        return [(r[0], r[1], r[2], float(r[3]), r[4], r[5], r[6], r[7] or "bruno") for r in rows]
     except Exception as e:
         print(f"[ERROR] Erro ao buscar registros financeiros filtrados: {e}", file=sys.stderr)
         return []
 
-def get_financial_summary() -> Dict[str, float]:
-    """Retorna a soma de receitas, despesas e o saldo atual de registros ativos."""
+def get_financial_summary(month_year: Optional[str] = None, user_name: Optional[str] = None) -> Dict[str, float]:
+    """Retorna a soma de receitas, despesas e o saldo atual de registros ativos com filtro opcional por mês e usuário."""
     try:
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("SELECT SUM(amount) FROM financial_records WHERE active = TRUE AND type = 'receita'")
+            rec_sql = "SELECT SUM(amount) FROM financial_records WHERE active = TRUE AND type = 'receita'"
+            desp_sql = "SELECT SUM(amount) FROM financial_records WHERE active = TRUE AND type = 'despesa'"
+            params = []
+            where_extra = ""
+            if month_year and "-" in month_year:
+                parts = month_year.split("-")
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    where_extra += " AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s"
+                    params.extend([int(parts[0]), int(parts[1])])
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                where_extra += " AND LOWER(user_name) = %s"
+                params.append(user_name.strip().lower())
+                
+            cur.execute(rec_sql + where_extra, tuple(params))
             receitas = cur.fetchone()[0] or 0.0
             
-            cur.execute("SELECT SUM(amount) FROM financial_records WHERE active = TRUE AND type = 'despesa'")
+            cur.execute(desp_sql + where_extra, tuple(params))
             despesas = cur.fetchone()[0] or 0.0
         conn.close()
         return {
@@ -1081,8 +1146,8 @@ def get_financial_categories() -> List[str]:
         print(f"[ERROR] Erro ao buscar categorias financeiras: {e}", file=sys.stderr)
         return []
 
-def get_expenses_by_category(month_year: Optional[str] = None) -> Dict[str, float]:
-    """Retorna os totais de despesas ativas agrupados por categoria."""
+def get_expenses_by_category(month_year: Optional[str] = None, user_name: Optional[str] = None) -> Dict[str, float]:
+    """Retorna os totais de despesas ativas agrupados por categoria com filtro opcional de usuário."""
     try:
         conn = get_connection()
         with conn.cursor() as cur:
@@ -1097,6 +1162,9 @@ def get_expenses_by_category(month_year: Optional[str] = None) -> Dict[str, floa
                     m, y = int(parts[0]), int(parts[1])
                     sql += "AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s "
                     params.extend([m, y])
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                sql += "AND LOWER(user_name) = %s "
+                params.append(user_name.strip().lower())
             sql += "GROUP BY category ORDER BY SUM(amount) DESC"
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
@@ -1106,26 +1174,28 @@ def get_expenses_by_category(month_year: Optional[str] = None) -> Dict[str, floa
         print(f"[ERROR] Erro ao agrupar despesas por categoria: {e}", file=sys.stderr)
         return {}
 
-def get_monthly_overview(year: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Retorna o consolidado mensal de receitas, despesas e saldo do ano."""
+def get_monthly_overview(year: Optional[int] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retorna o consolidado mensal de receitas, despesas e saldo do ano com filtro opcional de usuário."""
     if year is None:
         year = datetime.now().year
     try:
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            sql = """
                 SELECT 
                     EXTRACT(MONTH FROM COALESCE(due_date, date))::INTEGER as mes,
                     SUM(CASE WHEN lower(type) = 'receita' THEN amount ELSE 0 END) as receitas,
                     SUM(CASE WHEN lower(type) = 'despesa' THEN amount ELSE 0 END) as despesas
                 FROM financial_records
                 WHERE active = TRUE AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
-                GROUP BY EXTRACT(MONTH FROM COALESCE(due_date, date))
-                ORDER BY mes ASC
-                """,
-                (year,)
-            )
+            """
+            params = [year]
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                sql += " AND LOWER(user_name) = %s"
+                params.append(user_name.strip().lower())
+            sql += " GROUP BY EXTRACT(MONTH FROM COALESCE(due_date, date)) ORDER BY mes ASC"
+            
+            cur.execute(sql, tuple(params))
             rows = cur.fetchall()
         conn.close()
         
@@ -1149,20 +1219,19 @@ def get_monthly_overview(year: Optional[int] = None) -> List[Dict[str, Any]]:
         return []
 
 # 4.1 Contas Recorrentes, Cartões de Crédito e Orçamento Diário
-def add_recurring_bill(name: str, category: str, default_amount: float, due_day: int) -> bool:
-    """Adiciona um modelo de conta recorrente mensal."""
+def add_recurring_bill(name: str, category: str, default_amount: float, due_day: int, user_name: str = "bruno") -> bool:
     try:
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO recurring_bills (name, category, default_amount, due_day, active) VALUES (%s, %s, %s, %s, TRUE)",
-                (clean_string(name), clean_string(category), float(default_amount), int(due_day))
+                "INSERT INTO recurring_bills (name, category, default_amount, due_day, user_name) VALUES (%s, %s, %s, %s, %s)",
+                (clean_string(name), clean_string(category), float(default_amount), int(due_day), clean_string(user_name).strip().lower() or "bruno")
             )
         conn.commit()
         conn.close()
         return True
     except Exception as e:
-        print(f"[ERROR] Erro ao cadastrar conta recorrente: {e}", file=sys.stderr)
+        print(f"[ERROR] Erro ao adicionar modelo de conta fixa: {e}", file=sys.stderr)
         return False
 
 def get_recurring_bills() -> List[Dict[str, Any]]:
@@ -1456,9 +1525,10 @@ def get_distinct_cards() -> List[str]:
         return ["BB", "C6", "Itau", "Porto-Seguro"]
     return sorted(list(cards))
 
-def get_monthly_bills(month_year: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_monthly_bills(month_year: Optional[str] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    Retorna a lista unificada de contas mensais (fixas) e faturas consolidadas de cartão para o mês especificado.
+    Retorna a lista unificada de contas mensais (fixas) e faturas consolidadas de cartão para o mês especificado,
+    com suporte a filtro por usuário.
     """
     now = datetime.now()
     if month_year and "-" in month_year:
@@ -1472,17 +1542,20 @@ def get_monthly_bills(month_year: Optional[str] = None) -> List[Dict[str, Any]]:
         conn = get_connection()
         with conn.cursor() as cur:
             # 1. Contas mensais avulsas cadastradas
-            cur.execute(
-                """
-                SELECT id, category, amount, description, due_date, date, is_paid, payment_date
+            sql1 = """
+                SELECT id, category, amount, description, due_date, date, is_paid, payment_date, user_name
                 FROM financial_records
                 WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'monthly'
                   AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
                   AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
-                ORDER BY due_date ASC, id ASC
-                """,
-                (m, y)
-            )
+            """
+            params1 = [m, y]
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                sql1 += " AND LOWER(user_name) = %s"
+                params1.append(user_name.strip().lower())
+            sql1 += " ORDER BY due_date ASC, id ASC"
+            
+            cur.execute(sql1, tuple(params1))
             for r in cur.fetchall():
                 bills.append({
                     "id": r[0],
@@ -1493,31 +1566,36 @@ def get_monthly_bills(month_year: Optional[str] = None) -> List[Dict[str, Any]]:
                     "is_paid": bool(r[6]),
                     "payment_date": r[7],
                     "is_card_invoice": False,
-                    "card_name": None
+                    "card_name": None,
+                    "user_name": r[8] or "bruno"
                 })
                 
             # 2. Faturas consolidadas de cartões de crédito
-            cur.execute(
-                """
+            sql2 = """
                 SELECT 
                     card_name,
                     SUM(amount) as total_fatura,
                     MIN(due_date) as data_venc,
-                    BOOL_AND(is_paid) as todos_pagos
+                    BOOL_AND(is_paid) as todos_pagos,
+                    user_name
                 FROM financial_records
                 WHERE active = TRUE AND nature = 'card_purchase' AND card_name IS NOT NULL
                   AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
                   AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
-                GROUP BY card_name
-                ORDER BY card_name ASC
-                """,
-                (m, y)
-            )
+            """
+            params2 = [m, y]
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                sql2 += " AND LOWER(user_name) = %s"
+                params2.append(user_name.strip().lower())
+            sql2 += " GROUP BY card_name, user_name ORDER BY card_name ASC"
+            
+            cur.execute(sql2, tuple(params2))
             for r in cur.fetchall():
                 c_name = r[0]
                 tot = float(r[1]) if r[1] is not None else 0.0
                 venc = r[2]
                 all_paid = bool(r[3]) if r[3] is not None else False
+                u_owner = r[4] or "bruno"
                 bills.append({
                     "id": f"card_{c_name}",
                     "name": f"Fatura {c_name}",
@@ -1527,7 +1605,8 @@ def get_monthly_bills(month_year: Optional[str] = None) -> List[Dict[str, Any]]:
                     "is_paid": all_paid,
                     "payment_date": None,
                     "is_card_invoice": True,
-                    "card_name": c_name
+                    "card_name": c_name,
+                    "user_name": u_owner
                 })
         conn.close()
     except Exception as e:
@@ -1584,7 +1663,8 @@ def add_card_purchase(
     total_amount: float,
     installments: int,
     description: str,
-    buy_date_str: Optional[str] = None
+    buy_date_str: Optional[str] = None,
+    user_name: str = "bruno"
 ) -> bool:
     """Registra uma compra à vista ou parcelada no cartão de crédito, calculando parcelas e faturas futuras."""
     cards_config = get_credit_cards().get("cartoes", {})
@@ -1630,6 +1710,7 @@ def add_card_purchase(
     
     records = []
     import calendar
+    u_owner = clean_string(user_name).strip().lower() if user_name else "bruno"
     for i in range(1, inst_count + 1):
         inst_amount = round(base_inst_val + diff, 2) if i == 1 else base_inst_val
         due_month = first_due_month + (i - 1)
@@ -1651,7 +1732,8 @@ def add_card_purchase(
             buy_date.date(),
             due_date,
             "card_purchase",
-            matched_name
+            matched_name,
+            u_owner
         ))
         
     try:
@@ -1659,8 +1741,8 @@ def add_card_purchase(
         with conn.cursor() as cur:
             cur.executemany(
                 """
-                INSERT INTO financial_records (type, category, amount, description, date, due_date, nature, card_name, is_paid, active)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                INSERT INTO financial_records (type, category, amount, description, date, due_date, nature, card_name, user_name, is_paid, active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
                 """,
                 records
             )
@@ -1671,8 +1753,8 @@ def add_card_purchase(
         print(f"[ERROR] Erro ao registrar compra no cartão: {e}", file=sys.stderr)
         return False
 
-def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Retorna os lançamentos e parcelas individuais de compras no cartão de crédito."""
+def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retorna os lançamentos e parcelas individuais de compras no cartão de crédito com filtro opcional por usuário."""
     now = datetime.now()
     if month_year and "-" in month_year:
         parts = month_year.split("-")
@@ -1685,7 +1767,7 @@ def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str
         conn = get_connection()
         with conn.cursor() as cur:
             sql = """
-                SELECT id, card_name, category, amount, description, due_date, date, is_paid
+                SELECT id, card_name, category, amount, description, due_date, date, is_paid, user_name
                 FROM financial_records
                 WHERE active = TRUE AND nature = 'card_purchase'
                   AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
@@ -1696,6 +1778,9 @@ def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str
             if c_clean and c_clean not in ["Todos", "Todas", "Todos os Cartões", "todos os cartões", "Cartão de Crédito"]:
                 sql += " AND UPPER(card_name) = %s"
                 params.append(c_clean.upper())
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                sql += " AND LOWER(user_name) = %s"
+                params.append(user_name.strip().lower())
                 
             sql += " ORDER BY due_date ASC, id ASC"
             cur.execute(sql, tuple(params))
@@ -1708,15 +1793,16 @@ def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str
                     "description": r[4],
                     "due_date": r[5] or r[6],
                     "buy_date": r[6],
-                    "is_paid": bool(r[7])
+                    "is_paid": bool(r[7]),
+                    "user_name": r[8] or "bruno"
                 })
         conn.close()
     except Exception as e:
         print(f"[ERROR] Erro ao buscar compras de cartão: {e}", file=sys.stderr)
     return items
 
-def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Retorna as receitas ativas para o mês especificado."""
+def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retorna as receitas ativas para o mês especificado com filtro opcional por usuário."""
     now = datetime.now()
     if month_year and "-" in month_year:
         parts = month_year.split("-")
@@ -1729,7 +1815,7 @@ def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str
         conn = get_connection()
         with conn.cursor() as cur:
             sql = """
-                SELECT id, category, amount, description, COALESCE(due_date, date), date
+                SELECT id, category, amount, description, COALESCE(due_date, date), date, user_name
                 FROM financial_records
                 WHERE active = TRUE AND lower(type) = 'receita'
                   AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
@@ -1739,6 +1825,9 @@ def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str
             if category and category not in ["Todas", "Todos", "", None]:
                 sql += " AND lower(category) = %s"
                 params.append(category.strip().lower())
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                sql += " AND LOWER(user_name) = %s"
+                params.append(user_name.strip().lower())
             if query and query.strip():
                 sql += " AND (description ILIKE %s OR category ILIKE %s)"
                 termo = f"%{query.strip()}%"
@@ -1753,15 +1842,16 @@ def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str
                     "amount": float(r[2]),
                     "description": r[3] or "",
                     "due_date": r[4],
-                    "date": r[5]
+                    "date": r[5],
+                    "user_name": r[6] or "bruno"
                 })
         conn.close()
     except Exception as e:
         print(f"[ERROR] Erro ao buscar receitas: {e}", file=sys.stderr)
     return incomes
 
-def get_daily_expenses(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None) -> List[Tuple]:
-    """Retorna exclusivamente as despesas rotineiras diárias (nature = 'daily')."""
+def get_daily_expenses(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None, user_name: Optional[str] = None) -> List[Tuple]:
+    """Retorna exclusivamente as despesas rotineiras diárias (nature = 'daily') com filtro opcional por usuário."""
     now = datetime.now()
     if month_year and "-" in month_year:
         parts = month_year.split("-")
@@ -1774,7 +1864,7 @@ def get_daily_expenses(month_year: Optional[str] = None, category: Optional[str]
         conn = get_connection()
         with conn.cursor() as cur:
             sql = """
-                SELECT id, type, category, amount, description, date, due_date
+                SELECT id, type, category, amount, description, date, due_date, user_name
                 FROM financial_records
                 WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'daily'
                   AND EXTRACT(MONTH FROM COALESCE(date, due_date)) = %s
@@ -1784,6 +1874,9 @@ def get_daily_expenses(month_year: Optional[str] = None, category: Optional[str]
             if category and category not in ["Todas", "Todos", "", None]:
                 sql += " AND lower(category) = %s"
                 params.append(category.strip().lower())
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                sql += " AND LOWER(user_name) = %s"
+                params.append(user_name.strip().lower())
             if query and query.strip():
                 sql += " AND (description ILIKE %s OR category ILIKE %s)"
                 termo = f"%{query.strip()}%"
@@ -1792,15 +1885,15 @@ def get_daily_expenses(month_year: Optional[str] = None, category: Optional[str]
             sql += " ORDER BY COALESCE(date, due_date) DESC, id DESC"
             cur.execute(sql, tuple(params))
             raw = cur.fetchall()
-            rows = [(r[0], r[1], r[2], float(r[3]), r[4], r[5], r[6]) for r in raw]
+            rows = [(r[0], r[1], r[2], float(r[3]), r[4], r[5], r[6], r[7] or "bruno") for r in raw]
         conn.close()
     except Exception as e:
         print(f"[ERROR] Erro ao buscar despesas diárias: {e}", file=sys.stderr)
     return rows
 
-def get_daily_budget_summary(month_year: Optional[str] = None) -> Dict[str, Any]:
+def get_daily_budget_summary(month_year: Optional[str] = None, user_name: Optional[str] = None) -> Dict[str, Any]:
     """
-    Calcula o balanço orçamentário e a disponibilidade de gastos por dia (Teto Diário).
+    Calcula o balanço orçamentário e a disponibilidade de gastos por dia (Teto Diário) com filtro opcional de usuário.
     """
     import calendar
     now = datetime.now()
@@ -1826,47 +1919,51 @@ def get_daily_budget_summary(month_year: Optional[str] = None) -> Dict[str, Any]
     try:
         conn = get_connection()
         with conn.cursor() as cur:
+            u_cond = ""
+            u_params = []
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                u_cond = " AND LOWER(user_name) = %s"
+                u_params = [user_name.strip().lower()]
+
             # 1. Total de Receitas do Mês
-            cur.execute(
-                """
+            rec_sql = f"""
                 SELECT COALESCE(SUM(amount), 0)
                 FROM financial_records
                 WHERE active = TRUE AND lower(type) = 'receita'
                   AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
                   AND EXTRACT(YEAR FROM COALESCE(due_date, date)) = %s
-                """,
-                (m, y)
-            )
+                  {u_cond}
+            """
+            cur.execute(rec_sql, tuple([m, y] + u_params))
             res["receitas_mes"] = float(cur.fetchone()[0])
             
             # 2. Total de Gastos Diários no Mês
-            cur.execute(
-                """
+            desp_sql = f"""
                 SELECT COALESCE(SUM(amount), 0)
                 FROM financial_records
                 WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'daily'
                   AND EXTRACT(MONTH FROM COALESCE(date, due_date)) = %s
                   AND EXTRACT(YEAR FROM COALESCE(date, due_date)) = %s
-                """,
-                (m, y)
-            )
+                  {u_cond}
+            """
+            cur.execute(desp_sql, tuple([m, y] + u_params))
             res["gastos_diarios_mes"] = float(cur.fetchone()[0])
             
             # 3. Gasto Diário Realizado Hoje
-            cur.execute(
-                """
+            hoje_sql = f"""
                 SELECT COALESCE(SUM(amount), 0)
                 FROM financial_records
                 WHERE active = TRUE AND lower(type) = 'despesa' AND nature = 'daily'
                   AND date = CURRENT_DATE
-                """
-            )
+                  {u_cond}
+            """
+            cur.execute(hoje_sql, tuple(u_params))
             res["gasto_hoje"] = float(cur.fetchone()[0])
             
         conn.close()
         
         # 4. Total de Contas Mensais Fixas e Faturas
-        monthly_bills = get_monthly_bills(f"{m:02d}-{y}")
+        monthly_bills = get_monthly_bills(f"{m:02d}-{y}", user_name=user_name)
         res["custos_fixos_mes"] = sum(b["amount"] for b in monthly_bills)
         
         # 5. Cálculos Orçamentários
@@ -1899,8 +1996,12 @@ def add_cron_job(name: str, cron_expression: str, task_prompt: str) -> bool:
         prompt_clean = clean_string(task_prompt)
         # Valida a expressão cron e calcula o próximo disparo
         base_time = datetime.now()
-        iter = croniter(cron_expression, base_time)
-        next_run = iter.get_next(datetime)
+        try:
+            from croniter import croniter
+            iter = croniter(cron_expression, base_time)
+            next_run = iter.get_next(datetime)
+        except Exception:
+            next_run = base_time
         
         conn = get_connection()
         with conn.cursor() as cur:
@@ -2773,4 +2874,342 @@ def toggle_mcp_server(name: str, is_active: Optional[bool] = None) -> bool:
     except Exception as e:
         logging.error("Erro ao alternar status do servidor MCP '%s': %s", name, e)
         return False
+
+# =====================================================================
+# AUTENTICAÇÃO E GESTÃO DE USUÁRIOS (BRUNO & FABIANA)
+# =====================================================================
+
+def seed_default_users():
+    """Garante a existência e senha inicial dos usuários padrão (Bruno e Fabiana)."""
+    try:
+        users = [
+            ("bruno", "Bruno", os.environ.get("BRUNO_INITIAL_PASSWORD", "bruno123"), "admin"),
+            ("fabiana", "Fabiana", os.environ.get("FABIANA_INITIAL_PASSWORD", "fabiana123"), "user"),
+        ]
+        conn = get_connection()
+        with conn.cursor() as cur:
+            for u_name, d_name, pwd, role in users:
+                cur.execute("SELECT user_id, password_hash FROM users WHERE LOWER(user_name) = %s", (u_name.lower(),))
+                row = cur.fetchone()
+                if not row:
+                    p_hash = hash_password(pwd)
+                    cur.execute(
+                        """
+                        INSERT INTO users (user_name, display_name, password_hash, role)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (u_name, d_name, p_hash, role)
+                    )
+                elif not row[1]:
+                    p_hash = hash_password(pwd)
+                    cur.execute(
+                        """
+                        UPDATE users 
+                        SET display_name = %s, password_hash = %s, role = %s
+                        WHERE user_id = %s
+                        """,
+                        (d_name, p_hash, role, row[0])
+                    )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error("Erro ao semear usuários padrão: %s", e)
+
+def authenticate_user(user_name: str, plain_password: str) -> Optional[Dict[str, Any]]:
+    """Autentica o usuário pelo nome e senha, retornando seus dados em caso de sucesso."""
+    if not user_name or not plain_password:
+        return None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, user_name, display_name, password_hash, role
+                FROM users
+                WHERE LOWER(user_name) = %s
+                """,
+                (user_name.strip().lower(),)
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        u_id, u_name, d_name, p_hash, role = row
+        if not p_hash or not verify_password(plain_password, p_hash):
+            return None
+        return {
+            "user_id": u_id,
+            "user_name": u_name,
+            "display_name": d_name or u_name.capitalize(),
+            "role": role or "user"
+        }
+    except Exception as e:
+        logging.error("Erro na autenticação do usuário '%s': %s", user_name, e)
+        return None
+
+def get_user_by_name(user_name: str) -> Optional[Dict[str, Any]]:
+    """Busca dados de um usuário pelo nome."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, user_name, display_name, role, created_at
+                FROM users
+                WHERE LOWER(user_name) = %s
+                """,
+                (user_name.strip().lower(),)
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "user_id": row[0],
+            "user_name": row[1],
+            "display_name": row[2] or row[1].capitalize(),
+            "role": row[3] or "user",
+            "created_at": row[4]
+        }
+    except Exception as e:
+        logging.error("Erro ao buscar usuário '%s': %s", user_name, e)
+        return None
+
+def list_users() -> List[Dict[str, Any]]:
+    """Lista todos os usuários cadastrados."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id, user_name, display_name, role, created_at FROM users ORDER BY user_id ASC")
+            rows = cur.fetchall()
+        conn.close()
+        return [{
+            "user_id": r[0],
+            "user_name": r[1],
+            "display_name": r[2] or r[1].capitalize(),
+            "role": r[3] or "user",
+            "created_at": r[4]
+        } for r in rows]
+    except Exception as e:
+        logging.error("Erro ao listar usuários: %s", e)
+        return []
+
+def update_user_password(user_name: str, new_password: str) -> bool:
+    """Atualiza a senha de um usuário."""
+    try:
+        p_hash = hash_password(new_password)
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET password_hash = %s WHERE LOWER(user_name) = %s", (p_hash, user_name.strip().lower()))
+            ok = cur.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+    except Exception as e:
+        logging.error("Erro ao atualizar senha de '%s': %s", user_name, e)
+        return False
+
+# =====================================================================
+# GESTÃO DE TOKENS MCP & AUDITORIA DE ACESSOS (HERMES)
+# =====================================================================
+
+def create_mcp_token_record(name: str, created_by: str = "bruno") -> Tuple[bool, str, str]:
+    """
+    Gera um novo token MCP e registra o hash no banco.
+    Retorna (sucesso, raw_token, mensagem).
+    """
+    try:
+        name_clean = clean_string(name).strip()
+        if not name_clean:
+            return False, "", "O apelido do token não pode ser vazio."
+            
+        raw_token, token_hash, prefix = generate_mcp_token()
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mcp_tokens (name, token_hash, raw_token_prefix, created_by, is_active)
+                VALUES (%s, %s, %s, %s, TRUE)
+                RETURNING id
+                """,
+                (name_clean, token_hash, prefix, clean_string(created_by).strip().lower() or "bruno")
+            )
+            token_id = cur.fetchone()[0]
+        conn.commit()
+        conn.close()
+        return True, raw_token, f"Token #{token_id} criado com sucesso!"
+    except Exception as e:
+        logging.error("Erro ao criar token MCP: %s", e)
+        return False, "", f"Erro ao criar token: {e}"
+
+def list_mcp_tokens() -> List[Dict[str, Any]]:
+    """Lista todos os tokens MCP registrados para visualização no painel."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, raw_token_prefix, created_by, created_at, expires_at, is_active, last_used_at
+                FROM mcp_tokens
+                ORDER BY id DESC
+                """
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return [{
+            "id": r[0],
+            "name": r[1],
+            "prefix": r[2],
+            "created_by": r[3],
+            "created_at": r[4],
+            "expires_at": r[5],
+            "is_active": bool(r[6]),
+            "last_used_at": r[7]
+        } for r in rows]
+    except Exception as e:
+        logging.error("Erro ao listar tokens MCP: %s", e)
+        return []
+
+def revoke_mcp_token(token_id: int) -> bool:
+    """Revoga/desativa um token MCP."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE mcp_tokens SET is_active = FALSE WHERE id = %s", (int(token_id),))
+            ok = cur.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+    except Exception as e:
+        logging.error("Erro ao revogar token MCP #{token_id}: %s", e)
+        return False
+
+def delete_mcp_token(token_id: int) -> bool:
+    """Exclui permanentemente um token MCP."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM mcp_tokens WHERE id = %s", (int(token_id),))
+            ok = cur.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+    except Exception as e:
+        logging.error("Erro ao excluir token MCP #{token_id}: %s", e)
+        return False
+
+def validate_mcp_token(raw_token: str) -> Optional[Dict[str, Any]]:
+    """
+    Valida um token fornecido pelo cliente MCP (Hermes).
+    Se válido, atualiza last_used_at e retorna o registro do token.
+    """
+    if not raw_token or not raw_token.strip():
+        return None
+    token_str = raw_token.strip()
+    if token_str.startswith("Bearer "):
+        token_str = token_str[7:].strip()
+        
+    t_hash = hash_token(token_str)
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, created_by, is_active, expires_at
+                FROM mcp_tokens
+                WHERE token_hash = %s
+                """,
+                (t_hash,)
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return None
+            t_id, name, created_by, is_active, expires_at = row
+            if not is_active:
+                conn.close()
+                return None
+            if expires_at and expires_at < datetime.now():
+                conn.close()
+                return None
+            cur.execute("UPDATE mcp_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = %s", (t_id,))
+        conn.commit()
+        conn.close()
+        return {
+            "id": t_id,
+            "name": name,
+            "created_by": created_by
+        }
+    except Exception as e:
+        logging.error("Erro ao validar token MCP: %s", e)
+        return None
+
+def log_mcp_access(
+    token_id: Optional[int],
+    token_name: Optional[str],
+    client_ip: str,
+    tool_name: str,
+    request_params: Any,
+    response_summary: Any,
+    status: str = "success",
+    error_message: Optional[str] = None
+) -> bool:
+    """Registra histórico de execuções de ferramentas no MCP para auditoria."""
+    try:
+        req_str = json.dumps(request_params, default=str, ensure_ascii=False) if isinstance(request_params, (dict, list)) else str(request_params)
+        res_str = json.dumps(response_summary, default=str, ensure_ascii=False) if isinstance(response_summary, (dict, list)) else str(response_summary)
+        
+        if len(req_str) > 4000:
+            req_str = req_str[:4000] + "... [truncado]"
+        if len(res_str) > 4000:
+            res_str = res_str[:4000] + "... [truncado]"
+            
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mcp_access_logs (token_id, token_name, client_ip, tool_name, request_params, response_summary, status, error_message)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (token_id, token_name, client_ip, tool_name, req_str, res_str, status, error_message)
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logging.error("Erro ao salvar log de acesso MCP: %s", e)
+        return False
+
+def get_mcp_access_logs(limit: int = 50) -> List[Dict[str, Any]]:
+    """Retorna os logs de auditoria mais recentes de ferramentas executadas pelo MCP."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, token_id, token_name, client_ip, tool_name, request_params, response_summary, status, error_message, executed_at
+                FROM mcp_access_logs
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (int(limit),)
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return [{
+            "id": r[0],
+            "token_id": r[1],
+            "token_name": r[2] or "Sem Token",
+            "client_ip": r[3] or "",
+            "tool_name": r[4],
+            "request_params": r[5],
+            "response_summary": r[6],
+            "status": r[7],
+            "error_message": r[8],
+            "executed_at": r[9]
+        } for r in rows]
+    except Exception as e:
+        logging.error("Erro ao listar logs do MCP: %s", e)
+        return []
+
 

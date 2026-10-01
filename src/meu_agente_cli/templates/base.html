@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Gestão Financeira{% endblock %} - Finanças & MCP</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HTMX CDN -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .htmx-indicator { display: none; }
+        .htmx-request .htmx-indicator { display: inline-block; }
+        .htmx-request.htmx-indicator { display: inline-block; }
+    </style>
+</head>
+<body class="h-full flex flex-col font-sans antialiased bg-slate-950 text-slate-200">
+    <!-- Navbar -->
+    <header class="sticky top-0 z-50 bg-slate-900/90 backdrop-blur border-b border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <!-- Logo & Brand -->
+                <div class="flex items-center space-x-3">
+                    <a href="/dashboard" class="flex items-center space-x-2 text-indigo-400 hover:text-indigo-300 font-bold text-lg">
+                        <span class="p-2 bg-indigo-600/20 text-indigo-400 rounded-lg border border-indigo-500/30">💰</span>
+                        <span>Meu Financeiro</span>
+                    </a>
+                    <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">MCP v2</span>
+                </div>
+
+                <!-- Navigation Tabs Desktop -->
+                <nav class="hidden md:flex space-x-1 lg:space-x-2">
+                    <a href="/dashboard?user_name={{ active_user_filter or '' }}" 
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'dashboard' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        📊 Dashboard
+                    </a>
+                    <a href="/contas?user_name={{ active_user_filter or '' }}" 
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'contas' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        📅 Contas do Mês
+                    </a>
+                    <a href="/cartoes?user_name={{ active_user_filter or '' }}" 
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'cartoes' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        💳 Cartões
+                    </a>
+                    <a href="/lancamentos?user_name={{ active_user_filter or '' }}" 
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'lancamentos' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        💵 Receitas & Gastos
+                    </a>
+                    <a href="/investimentos" 
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'investimentos' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        📈 Investimentos
+                    </a>
+                    <a href="/tokens" 
+                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'tokens' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                        🔑 Tokens MCP & Auditoria
+                    </a>
+                </nav>
+
+                <!-- User Filter & Auth Info -->
+                <div class="flex items-center space-x-3">
+                    <!-- Seletor de Titular / Filtro -->
+                    <form method="GET" action="{{ request.url.path }}" class="flex items-center">
+                        <select name="user_name" onchange="this.form.submit()" 
+                                class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="" {% if not active_user_filter %}selected{% endif %}>👥 Todos (Familiar)</option>
+                            <option value="bruno" {% if active_user_filter == 'bruno' %}selected{% endif %}>🧑 Bruno</option>
+                            <option value="fabiana" {% if active_user_filter == 'fabiana' %}selected{% endif %}>👩 Fabiana</option>
+                        </select>
+                    </form>
+
+                    <!-- Logged User Badge -->
+                    <div class="hidden sm:flex items-center space-x-2 pl-2 border-l border-slate-800">
+                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-800 text-indigo-300 border border-slate-700">
+                            👤 {{ user.display_name if user else 'Usuário' }}
+                        </span>
+                        <a href="/logout" title="Sair da Conta" class="text-xs text-rose-400 hover:text-rose-300 px-2 py-1 rounded hover:bg-rose-950/40 border border-rose-900/40 transition">
+                            Sair
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile Navigation Submenu -->
+        <div class="md:hidden flex overflow-x-auto py-2 px-4 space-x-2 border-t border-slate-800 bg-slate-900/60 scrollbar-none">
+            <a href="/dashboard?user_name={{ active_user_filter or '' }}" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'dashboard' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">📊 Dashboard</a>
+            <a href="/contas?user_name={{ active_user_filter or '' }}" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'contas' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">📅 Contas</a>
+            <a href="/cartoes?user_name={{ active_user_filter or '' }}" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'cartoes' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">💳 Cartões</a>
+            <a href="/lancamentos?user_name={{ active_user_filter or '' }}" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'lancamentos' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">💵 Gastos</a>
+            <a href="/investimentos" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'investimentos' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">📈 Invest</a>
+            <a href="/tokens" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'tokens' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">🔑 MCP</a>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Toast Notifications Container -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+    <script>
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bgClass = type === 'success' ? 'bg-emerald-900/90 border-emerald-700 text-emerald-100' : 'bg-rose-900/90 border-rose-700 text-rose-100';
+            toast.className = `${bgClass} border px-4 py-3 rounded-lg shadow-lg text-sm flex items-center space-x-2 pointer-events-auto transition-opacity duration-300`;
+            toast.innerHTML = `<span>${type === 'success' ? '✅' : '❌'}</span><span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

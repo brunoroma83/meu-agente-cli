@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block title %}Carteira de Investimentos{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-900 p-4 rounded-xl border border-slate-800">
+        <div>
+            <h1 class="text-xl font-bold text-white flex items-center space-x-2">
+                <span>Carteira de Investimentos</span>
+            </h1>
+            <p class="text-xs text-slate-400">Posições consolidadas de Ações (Renda Variável) e Títulos de Renda Fixa.</p>
+        </div>
+
+        <div class="flex items-center space-x-2">
+            <button onclick="document.getElementById('modal-add-acao').classList.remove('hidden')"
+                    class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition shadow">
+                + Nova Ação
+            </button>
+            <button onclick="document.getElementById('modal-add-rf').classList.remove('hidden')"
+                    class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg border border-slate-700 transition">
+                + Renda Fixa
+            </button>
+        </div>
+    </div>
+
+    <!-- Macro KPIs -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs text-slate-400 uppercase tracking-wider">Patrimônio Consolidado</span>
+            <div class="text-2xl font-bold text-white mt-1">R$ {{ "%.2f"|format(resumo.valor_atual) }}</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs text-sky-400 uppercase tracking-wider">Saldo em Renda Fixa</span>
+            <div class="text-2xl font-bold text-sky-400 mt-1">R$ {{ "%.2f"|format(resumo.valor_atual_rf) }}</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs text-emerald-400 uppercase tracking-wider">Saldo em Ações (Custódia)</span>
+            <div class="text-2xl font-bold text-emerald-400 mt-1">R$ {{ "%.2f"|format(resumo.valor_atual_acoes) }}</div>
+        </div>
+    </div>
+
+    <!-- Ações (Renda Variável) -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+        <div class="flex items-center justify-between">
+            <h3 class="text-sm font-bold text-white flex items-center space-x-2">
+                <span>📊 Ações em Custódia</span>
+            </h3>
+            <span class="text-xs text-slate-400">{{ acoes|length }} ativos em carteira</span>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs text-slate-300">
+                <thead class="bg-slate-950 text-slate-400 uppercase tracking-wider text-[11px] border-b border-slate-800">
+                    <tr>
+                        <th class="py-2.5 px-3">Ticker</th>
+                        <th class="py-2.5 px-3">Quantidade</th>
+                        <th class="py-2.5 px-3">Preço Médio</th>
+                        <th class="py-2.5 px-3">Cotação Atual</th>
+                        <th class="py-2.5 px-3">Total Investido</th>
+                        <th class="py-2.5 px-3 text-right">Valor Atual</th>
+                        <th class="py-2.5 px-3 text-right">Lucro/Prejuízo</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 font-mono">
+                    {% for a in acoes %}
+                    <tr class="hover:bg-slate-800/30 transition">
+                        <td class="py-2.5 px-3 font-sans font-bold text-indigo-400">
+                            {{ a.codigo_acao }}
+                        </td>
+                        <td class="py-2.5 px-3">{{ a.quantidade_custodia }}</td>
+                        <td class="py-2.5 px-3">R$ {{ "%.2f"|format(a.preco_medio) }}</td>
+                        <td class="py-2.5 px-3 text-slate-400">R$ {{ "%.2f"|format(a.preco_mercado) }}</td>
+                        <td class="py-2.5 px-3 text-slate-400">R$ {{ "%.2f"|format(a.total_investido_liquido) }}</td>
+                        <td class="py-2.5 px-3 text-right font-bold text-white">R$ {{ "%.2f"|format(a.valor_atual) }}</td>
+                        <td class="py-2.5 px-3 text-right font-bold {% if a.lucro_prejuizo >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+                            R$ {{ "%.2f"|format(a.lucro_prejuizo) }} ({{ "%.2f"|format(a.rentabilidade_pct) }}%)
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="py-4 text-center text-slate-500 font-sans">Nenhuma ação em custódia.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Renda Fixa -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+        <div class="flex items-center justify-between">
+            <h3 class="text-sm font-bold text-white flex items-center space-x-2">
+                <span>🛡️ Títulos de Renda Fixa</span>
+            </h3>
+            <span class="text-xs text-slate-400">{{ renda_fixa|length }} títulos ativos</span>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs text-slate-300">
+                <thead class="bg-slate-950 text-slate-400 uppercase tracking-wider text-[11px] border-b border-slate-800">
+                    <tr>
+                        <th class="py-2.5 px-3">Título</th>
+                        <th class="py-2.5 px-3">Instituição</th>
+                        <th class="py-2.5 px-3">Tipo</th>
+                        <th class="py-2.5 px-3">Data Início</th>
+                        <th class="py-2.5 px-3">Saldo Investido</th>
+                        <th class="py-2.5 px-3 text-right">Valor Atual</th>
+                        <th class="py-2.5 px-3 text-right">Rentabilidade</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 font-mono">
+                    {% for rf in renda_fixa %}
+                    <tr class="hover:bg-slate-800/30 transition">
+                        <td class="py-2.5 px-3 font-sans font-medium text-slate-200">{{ rf.nome_titulo }}</td>
+                        <td class="py-2.5 px-3 font-sans text-slate-400">{{ rf.nome_banco }}</td>
+                        <td class="py-2.5 px-3 font-sans text-slate-400">{{ rf.tipo_investimento }}</td>
+                        <td class="py-2.5 px-3 text-slate-400">{{ rf.data_inicio }}</td>
+                        <td class="py-2.5 px-3 text-slate-400">R$ {{ "%.2f"|format(rf.saldo_investido) }}</td>
+                        <td class="py-2.5 px-3 text-right font-bold text-white">R$ {{ "%.2f"|format(rf.valor_atual) }}</td>
+                        <td class="py-2.5 px-3 text-right font-bold text-emerald-400">{{ "%.2f"|format(rf.rentabilidade_pct) }}%</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="py-4 text-center text-slate-500 font-sans">Nenhum título de renda fixa cadastrado.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Adicionar Operação de Ação -->
+<div id="modal-add-acao" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-base font-bold text-white">Registrar Operação de Ação</h3>
+            <button onclick="document.getElementById('modal-add-acao').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+        </div>
+        <form method="POST" action="/investimentos/add_acao" onsubmit="document.getElementById('modal-add-acao').classList.add('hidden')" class="space-y-3 text-xs">
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Ticker / Código</label>
+                    <input type="text" name="codigo_acao" required placeholder="Ex: PETR4, VALE3"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white uppercase text-xs">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Operação</label>
+                    <select name="operacao" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                        <option value="COMPRA">COMPRA</option>
+                        <option value="VENDA">VENDA</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Quantidade</label>
+                    <input type="number" min="1" name="quantidade" required placeholder="100"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Preço Unitário (R$)</label>
+                    <input type="number" step="0.01" min="0.01" name="preco_unitario" required placeholder="0.00"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Taxas / Corretagem (R$)</label>
+                    <input type="number" step="0.01" min="0" name="taxas" value="0.00"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Data da Operação</label>
+                    <input type="date" name="data_operacao"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3">
+                <button type="button" onclick="document.getElementById('modal-add-acao').classList.add('hidden')"
+                        class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700">Cancelar</button>
+                <button type="submit" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">Registrar Ação</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal: Adicionar Renda Fixa -->
+<div id="modal-add-rf" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-base font-bold text-white">Cadastrar Título de Renda Fixa</h3>
+            <button onclick="document.getElementById('modal-add-rf').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+        </div>
+        <form method="POST" action="/investimentos/add_rf" onsubmit="document.getElementById('modal-add-rf').classList.add('hidden')" class="space-y-3 text-xs">
+            <div>
+                <label class="block text-slate-400 mb-1">Nome do Título</label>
+                <input type="text" name="nome_titulo" required placeholder="Ex: CDB Banco Inter 110% CDI"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Instituição / Banco</label>
+                    <input type="text" name="nome_banco" required placeholder="Ex: Banco Inter, Nubank, XP"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Tipo</label>
+                    <select name="tipo_investimento" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                        <option value="CDB">CDB</option>
+                        <option value="LCI">LCI</option>
+                        <option value="LCA">LCA</option>
+                        <option value="Tesouro Direto">Tesouro Direto</option>
+                        <option value="Debêntures">Debêntures</option>
+                        <option value="Outros">Outros</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Valor do Aporte Inicial (R$)</label>
+                    <input type="number" step="0.01" min="0.01" name="valor_investido" required placeholder="1000.00"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Data Início</label>
+                    <input type="date" name="data_inicio" required
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3">
+                <button type="button" onclick="document.getElementById('modal-add-rf').classList.add('hidden')"
+                        class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700">Cancelar</button>
+                <button type="submit" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">Cadastrar Título</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

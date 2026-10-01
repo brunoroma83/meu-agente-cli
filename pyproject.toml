@@ -1,42 +1,28 @@
 [project]
 name = "meu-agente-cli"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Serviço de Gestão Financeira com Web UI Leve e MCP Server para o Hermes"
 readme = "README.md"
 authors = [
     { name = "Bruno Roma", email = "bruuno@gmail.com" }
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "beautifulsoup4>=4.15.0",
-    "croniter>=6.2.4",
-    "cryptography>=50.0.0",
-    "dotenv>=0.9.9",
-    "edge-tts>=7.2.8",
-    "feedparser>=6.0.14",
-    "google-api-python-client>=2.200.0",
-    "google-auth-httplib2>=0.4.2",
-    "google-auth-oauthlib>=1.4.1",
-    "gradio>=5.0.0",
-    "httpx>=0.28.1",
-    "matplotlib>=3.10.9",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "jinja2>=3.1.4",
+    "python-multipart>=0.0.9",
+    "itsdangerous>=2.2.0",
+    "psycopg[binary]>=3.2.0",
+    "yfinance>=1.5.0",
     "mcp>=2.2.0",
-    "openpyxl>=3.1.2",
-    "psycopg[binary]>=3.3.4",
-    "pyaudio>=0.2.14",
-    "pypdf>=4.0.1",
-    "pypdf2>=3.0.1",
-    "pyTelegramBotAPI>=4.26.0",
-    "python-docx>=1.1.0",
-    "rich>=15.0.0",
-    "scikit-learn>=1.7.2",
-    "speechrecognition>=3.17.0",
-    "tqdm>=4.70.0",
-    "yfinance>=1.5.2",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
 ]
 
 [project.scripts]
-meu-agente-cli = "meu_agente_cli:main"
+meu-financeiro = "meu_agente_cli.main:run_server"
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]
@@ -44,6 +30,5 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "ipykernel>=7.3.0",
-    "torch>=2.13.0",
+    "pytest>=8.0.0",
 ]

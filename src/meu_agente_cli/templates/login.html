@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrar - Gestão Financeira</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="h-full flex items-center justify-center p-4 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950">
+    <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-8 relative overflow-hidden">
+        <!-- Glow Effect -->
+        <div class="absolute -top-12 -right-12 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute -bottom-12 -left-12 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div class="text-center mb-8">
+            <div class="inline-flex p-3 bg-indigo-600/20 text-indigo-400 rounded-2xl border border-indigo-500/30 text-3xl mb-3 shadow-inner">
+                💰
+            </div>
+            <h1 class="text-2xl font-bold tracking-tight text-white">Meu Financeiro</h1>
+            <p class="text-xs text-slate-400 mt-1">Gestão Financeira Pessoal & Familiar com MCP Server</p>
+        </div>
+
+        {% if error %}
+        <div class="mb-5 p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm flex items-center space-x-2">
+            <span>⚠️</span>
+            <span>{{ error }}</span>
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/login" class="space-y-4">
+            <div>
+                <label for="username" class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Usuário</label>
+                <input type="text" id="username" name="username" required autofocus placeholder="bruno ou fabiana"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition">
+            </div>
+
+            <div>
+                <label for="password" class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Senha</label>
+                <input type="password" id="password" name="password" required placeholder="••••••••"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition">
+            </div>
+
+            <button type="submit"
+                    class="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-medium rounded-lg text-sm transition shadow-lg shadow-indigo-600/30 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 mt-2">
+                Acessar Painel
+            </button>
+        </form>
+
+        <div class="mt-6 pt-5 border-t border-slate-800 text-center text-xs text-slate-500">
+            Acesso seguro criptografado com PBKDF2 & Cookie HTTP-Only
+        </div>
+    </div>
+</body>
+</html>

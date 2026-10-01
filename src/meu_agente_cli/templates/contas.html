@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+
+{% block title %}Contas Fixas do Mês{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header & Action Bar -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-900 p-4 rounded-xl border border-slate-800">
+        <div>
+            <h1 class="text-xl font-bold text-white flex items-center space-x-2">
+                <span>Contas Fixas & Faturas do Mês</span>
+                {% if active_user_filter %}
+                <span class="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                    {{ active_user_filter.capitalize() }}
+                </span>
+                {% endif %}
+            </h1>
+            <p class="text-xs text-slate-400">Gerencie pagamentos, faturas consolidadas e projeção anual de custos fixos.</p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+            <!-- Seletor de Mês -->
+            <form method="GET" action="/contas" class="flex items-center">
+                <input type="hidden" name="user_name" value="{{ active_user_filter or '' }}">
+                <input type="month" name="mes_ano" value="{{ mes_ano_input }}" onchange="this.form.submit()"
+                       class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </form>
+
+            <!-- Botão Projetar Ano -->
+            <form method="POST" action="/contas/projetar" class="inline"
+                  hx-post="/contas/projetar" hx-target="#bills-table-container" hx-swap="outerHTML"
+                  hx-confirm="Deseja projetar todas as contas fixas do catálogo para este ano?">
+                <input type="hidden" name="mes_ano" value="{{ mes_ano_input }}">
+                <input type="hidden" name="user_name" value="{{ active_user_filter or '' }}">
+                <button type="submit" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg border border-slate-700 transition">
+                    🔄 Projetar Fixas do Ano
+                </button>
+            </form>
+
+            <!-- Botão Adicionar Nova Conta -->
+            <button onclick="document.getElementById('modal-add-bill').classList.remove('hidden')"
+                    class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition shadow flex items-center space-x-1">
+                <span>+</span>
+                <span>Nova Conta</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Summary Stats Row -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs text-slate-400 uppercase tracking-wider">Total do Mês</span>
+            <div class="text-xl font-bold text-white mt-1">R$ {{ "%.2f"|format(total_mes) }}</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs text-emerald-400 uppercase tracking-wider">Total Já Pago</span>
+            <div class="text-xl font-bold text-emerald-400 mt-1">R$ {{ "%.2f"|format(total_pago) }}</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs text-amber-400 uppercase tracking-wider">Pendente de Pagamento</span>
+            <div class="text-xl font-bold text-amber-400 mt-1">R$ {{ "%.2f"|format(total_pendente) }}</div>
+        </div>
+    </div>
+
+    <!-- Bills Table Container -->
+    <div id="bills-table-container" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs text-slate-300">
+                <thead class="bg-slate-950 text-slate-400 uppercase tracking-wider text-[11px] border-b border-slate-800">
+                    <tr>
+                        <th class="py-3 px-4">Status</th>
+                        <th class="py-3 px-4">Vencimento</th>
+                        <th class="py-3 px-4">Descrição / Nome</th>
+                        <th class="py-3 px-4">Categoria</th>
+                        <th class="py-3 px-4">Titular</th>
+                        <th class="py-3 px-4 text-right">Valor</th>
+                        <th class="py-3 px-4 text-center">Ações</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 font-mono">
+                    {% for b in bills %}
+                    <tr class="hover:bg-slate-800/40 transition {% if b.is_paid %}opacity-75{% endif %}" id="bill-row-{{ b.id }}">
+                        <td class="py-3 px-4">
+                            {% if b.is_paid %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                ✅ Pago
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                ⏳ Pendente
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4 text-slate-300">
+                            {{ b.due_date.strftime('%d/%m/%Y') if b.due_date and b.due_date.strftime else (b.due_date or '-') }}
+                        </td>
+                        <td class="py-3 px-4 font-sans font-medium text-slate-100">
+                            {{ b.name }}
+                            {% if b.is_card_invoice %}
+                            <span class="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 ml-1 border border-indigo-500/30">Fatura Cartão</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4 font-sans text-slate-400">
+                            {{ b.category }}
+                        </td>
+                        <td class="py-3 px-4">
+                            <span class="px-2 py-0.5 rounded text-[10px] {% if b.user_name == 'bruno' %}bg-blue-500/10 text-blue-400 border border-blue-500/20{% else %}bg-purple-500/10 text-purple-400 border border-purple-500/20{% endif %}">
+                                {{ b.user_name.capitalize() if b.user_name else 'Bruno' }}
+                            </span>
+                        </td>
+                        <td class="py-3 px-4 text-right font-bold text-white">
+                            R$ {{ "%.2f"|format(b.amount) }}
+                        </td>
+                        <td class="py-3 px-4 text-center">
+                            <button hx-post="/contas/toggle/{{ b.id }}?mes_ano={{ mes_ano_input }}&user_name={{ active_user_filter or '' }}"
+                                    hx-target="#bills-table-container" hx-swap="outerHTML"
+                                    class="px-2.5 py-1 rounded text-xs font-sans transition {% if b.is_paid %}bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700{% else %}bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-sm{% endif %}">
+                                {% if b.is_paid %}Desmarcar{% else %}Marcar Pago{% endif %}
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="py-8 text-center text-slate-500 font-sans">
+                            Nenhuma conta encontrada para o mês {{ mes_ano_input }}.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Adicionar Conta do Mês -->
+<div id="modal-add-bill" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-base font-bold text-white">Adicionar Conta ao Mês</h3>
+            <button onclick="document.getElementById('modal-add-bill').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+        </div>
+        <form method="POST" action="/contas/add" hx-post="/contas/add" hx-target="#bills-table-container" hx-swap="outerHTML"
+              onsubmit="document.getElementById('modal-add-bill').classList.add('hidden')" class="space-y-3 text-xs">
+            <input type="hidden" name="mes_ano" value="{{ mes_ano_input }}">
+            <div>
+                <label class="block text-slate-400 mb-1">Nome / Descrição da Conta</label>
+                <input type="text" name="descricao" required placeholder="Ex: Energia, Aluguel, Internet"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Valor (R$)</label>
+                    <input type="number" step="0.01" min="0.01" name="valor" required placeholder="0.00"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Data de Vencimento</label>
+                    <input type="date" name="data_vencimento" required
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Categoria</label>
+                    <select name="categoria" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                        <option value="Casa">Casa</option>
+                        <option value="Energia">Energia</option>
+                        <option value="Internet">Internet</option>
+                        <option value="Condomínio">Condomínio</option>
+                        <option value="Seguro">Seguro</option>
+                        <option value="Educação">Educação</option>
+                        <option value="Saúde">Saúde</option>
+                        <option value="Serviços">Serviços</option>
+                        <option value="Outros" selected>Outros</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Responsável / Titular</label>
+                    <select name="user_name" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                        <option value="bruno" {% if active_user_filter == 'bruno' or user.user_name == 'bruno' %}selected{% endif %}>Bruno</option>
+                        <option value="fabiana" {% if active_user_filter == 'fabiana' or user.user_name == 'fabiana' %}selected{% endif %}>Fabiana</option>
+                    </select>
+                </div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3">
+                <button type="button" onclick="document.getElementById('modal-add-bill').classList.add('hidden')"
+                        class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700">Cancelar</button>
+                <button type="submit" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">Salvar Conta</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
