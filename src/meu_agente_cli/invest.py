@@ -383,6 +383,7 @@ def get_consolidado_renda_fixa(active_only: bool = True) -> List[Dict[str, Any]]
         for r in rows:
             consolidado.append({
                 "id": r[0],
+                "id_investimento": r[0],
                 "nome_titulo": r[1],
                 "nome_banco": r[2],
                 "tipo_investimento": r[3],

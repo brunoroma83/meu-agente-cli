@@ -94,7 +94,7 @@
                 <span>🛡️ Títulos de Renda Fixa</span>
             </h3>
             <div class="flex items-center space-x-2">
-                <button onclick="document.getElementById('modal-movimentar-rf').classList.remove('hidden')"
+                <button onclick="openMovimentarRfModalWithTitle('')"
                         class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition shadow flex items-center space-x-1">
                     <span>⚡</span>
                     <span>Movimentar Título</span>
@@ -134,7 +134,7 @@
                         <td class="py-2.5 px-3 text-center space-x-1">
                             <button type="button"
                                     onclick="openUpdateSaldoRfModal(this)"
-                                    data-id="{{ rf.id_investimento }}"
+                                    data-id="{{ rf.id or rf.id_investimento }}"
                                     data-nome="{{ rf.nome_titulo }}"
                                     data-valor="{{ '%.2f'|format(rf.valor_atual) }}"
                                     title="Atualizar saldo/valor atual"
@@ -142,7 +142,7 @@
                                 ✏️ Saldo
                             </button>
                             <button type="button"
-                                    onclick="openMovimentarRfModalWithTitle('{{ rf.id_investimento }}')"
+                                    onclick="openMovimentarRfModalWithTitle('{{ rf.id or rf.id_investimento }}')"
                                     title="Registrar aporte, resgate, juros ou imposto"
                                     class="px-2 py-0.5 rounded text-[11px] font-sans transition bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 inline-block">
                                 ⚡ Movimento
@@ -281,7 +281,7 @@
                 <label class="block text-slate-400 mb-1">Título de Renda Fixa</label>
                 <select id="mov-rf-titulo" name="id_investimento" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
                     {% for rf in renda_fixa %}
-                    <option value="{{ rf.id_investimento }}">{{ rf.nome_titulo }} ({{ rf.nome_banco }})</option>
+                    <option value="{{ rf.id or rf.id_investimento }}">{{ rf.nome_titulo }} ({{ rf.nome_banco }})</option>
                     {% endfor %}
                 </select>
             </div>
