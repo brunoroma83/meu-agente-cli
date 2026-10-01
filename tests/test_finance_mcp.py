@@ -41,6 +41,10 @@ def test_mcp_server_tools_registered():
         "marcar_conta_paga",
         "obter_orcamento_diario",
         "consultar_investimentos",
+        "atualizar_registro_financeiro",
+        "atualizar_conta_mensal",
+        "movimentar_renda_fixa",
+        "atualizar_saldo_renda_fixa",
     ]
     for expected in expected_tools:
         assert expected in tool_names
@@ -121,5 +125,106 @@ def test_mcp_auth_middleware_valid_bearer_token(monkeypatch):
     # Ao enviar token válido, o middleware permite a requisição seguir (não retorna 401)
     res = client.post("/messages/?session_id=fake_session", headers={"Authorization": "Bearer mcp_live_valido"})
     assert res.status_code != 401
+
+def test_web_app_edit_lancamento(monkeypatch):
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno Roma", role="admin")
+    client.cookies.set("finance_session", token)
+
+    called = {}
+    import meu_agente_cli.db as db
+    def mock_update(**kwargs):
+        called.update(kwargs)
+        return True
+    monkeypatch.setattr(db, "update_financial_record", mock_update)
+
+    res = client.post("/lancamentos/edit/10", data={
+        "tipo": "despesa",
+        "categoria": "Supermercado",
+        "valor": "125.50",
+        "descricao": "Compras semanais",
+        "data": "2026-10-01",
+        "user_name": "fabiana",
+        "mes_ano": "2026-10"
+    }, follow_redirects=False)
+
+    assert res.status_code == 303
+    assert called["record_id"] == 10
+    assert called["amount"] == 125.50
+    assert called["category"] == "Supermercado"
+    assert called["user_name"] == "fabiana"
+
+def test_web_app_edit_conta(monkeypatch):
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno Roma", role="admin")
+    client.cookies.set("finance_session", token)
+
+    called = {}
+    import meu_agente_cli.db as db
+    def mock_update_bill(**kwargs):
+        called.update(kwargs)
+        return True
+    monkeypatch.setattr(db, "update_monthly_bill", mock_update_bill)
+
+    res = client.post("/contas/edit/5", data={
+        "descricao": "Internet Fibra",
+        "valor": "149.90",
+        "data_vencimento": "2026-10-15",
+        "categoria": "Internet",
+        "user_name": "bruno",
+        "propagar_futuros": "on",
+        "mes_ano": "2026-10"
+    }, follow_redirects=False)
+
+    assert res.status_code == 303
+    assert called["bill_id"] == "5"
+    assert called["new_amount"] == 149.90
+    assert called["propagate_future"] is True
+    assert called["user_name"] == "bruno"
+
+def test_web_app_movimentar_rf(monkeypatch):
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno Roma", role="admin")
+    client.cookies.set("finance_session", token)
+
+    called = {}
+    import meu_agente_cli.invest as invest
+    def mock_movimentar(**kwargs):
+        called.update(kwargs)
+        return True
+    monkeypatch.setattr(invest, "add_movimentacao_renda_fixa", mock_movimentar)
+
+    res = client.post("/investimentos/movimentar_rf", data={
+        "id_investimento": "2",
+        "tipo_movimentacao": "APORTE",
+        "valor": "500.00",
+        "data_movimentacao": "2026-10-01"
+    }, follow_redirects=False)
+
+    assert res.status_code == 303
+    assert called["id_investimento"] == 2
+    assert called["tipo_movimentacao"] == "APORTE"
+    assert called["valor"] == 500.00
+
+def test_web_app_update_saldo_rf(monkeypatch):
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno Roma", role="admin")
+    client.cookies.set("finance_session", token)
+
+    called = {}
+    import meu_agente_cli.invest as invest
+    def mock_update_saldo(**kwargs):
+        called.update(kwargs)
+        return True
+    monkeypatch.setattr(invest, "update_valor_atual_renda_fixa", mock_update_saldo)
+
+    res = client.post("/investimentos/update_saldo_rf/2", data={
+        "novo_valor": "10550.25"
+    }, follow_redirects=False)
+
+    assert res.status_code == 303
+    assert called["id_investimento"] == 2
+    assert called["novo_valor"] == 10550.25
+
 
 

@@ -1003,7 +1003,7 @@ def get_financial_record_by_id(record_id: int) -> Optional[Dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, type, category, amount, description, date, due_date, nature, card_name, is_paid, active
+                SELECT id, type, category, amount, description, date, due_date, nature, card_name, is_paid, active, user_name
                 FROM financial_records 
                 WHERE id = %s AND active = TRUE
                 """,
@@ -1024,7 +1024,8 @@ def get_financial_record_by_id(record_id: int) -> Optional[Dict[str, Any]]:
             "nature": row[7],
             "card_name": row[8],
             "is_paid": bool(row[9]),
-            "active": bool(row[10])
+            "active": bool(row[10]),
+            "user_name": row[11] if len(row) > 11 and row[11] else "bruno"
         }
     except Exception as e:
         print(f"[ERROR] Erro ao buscar registro financeiro #{record_id}: {e}", file=sys.stderr)
@@ -1035,7 +1036,12 @@ def update_financial_record(
     description: Optional[str] = None,
     category: Optional[str] = None,
     amount: Optional[float] = None,
-    due_date: Optional[str] = None
+    due_date: Optional[str] = None,
+    date: Optional[str] = None,
+    record_type: Optional[str] = None,
+    user_name: Optional[str] = None,
+    is_paid: Optional[bool] = None,
+    payment_date: Optional[str] = None
 ) -> bool:
     """Atualiza os dados de um registro financeiro ativo existente."""
     try:
@@ -1054,8 +1060,30 @@ def update_financial_record(
             dt_parsed = parse_date_str(due_date)
             fields.append("due_date = %s")
             params.append(dt_parsed)
+        if date is not None:
+            dt_date = parse_date_str(date)
             fields.append("date = %s")
-            params.append(dt_parsed)
+            params.append(dt_date)
+        if record_type is not None:
+            clean_type = record_type.strip().lower()
+            if clean_type in ("despesa", "receita"):
+                fields.append("type = %s")
+                params.append(clean_type)
+        if user_name is not None:
+            u_clean = user_name.strip().lower()
+            if u_clean:
+                fields.append("user_name = %s")
+                params.append(u_clean)
+        if is_paid is not None:
+            fields.append("is_paid = %s")
+            params.append(bool(is_paid))
+            if is_paid and not payment_date:
+                fields.append("payment_date = CURRENT_DATE")
+            elif not is_paid:
+                fields.append("payment_date = NULL")
+        if payment_date is not None:
+            fields.append("payment_date = %s")
+            params.append(parse_date_str(payment_date))
             
         if not fields:
             return False
@@ -1424,7 +1452,10 @@ def update_monthly_bill(
     record_id: int, 
     new_amount: float, 
     new_due_date: Optional[str] = None, 
-    propagate_future: bool = False
+    propagate_future: bool = False,
+    user_name: Optional[str] = None,
+    category: Optional[str] = None,
+    description: Optional[str] = None
 ) -> bool:
     """
     Atualiza o valor e/ou data de vencimento de uma conta mensal.
@@ -1453,6 +1484,15 @@ def update_monthly_bill(
             if new_due_date and new_due_date.strip():
                 sql_update += ", due_date = %s"
                 params.append(new_due_date.strip())
+            if user_name and user_name.strip():
+                sql_update += ", user_name = %s"
+                params.append(user_name.strip().lower())
+            if category and category.strip():
+                sql_update += ", category = %s"
+                params.append(clean_string(category))
+            if description and description.strip():
+                sql_update += ", description = %s"
+                params.append(clean_string(description))
             sql_update += " WHERE id = %s"
             params.append(record_id)
             cur.execute(sql_update, tuple(params))

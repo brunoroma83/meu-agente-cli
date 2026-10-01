@@ -111,7 +111,19 @@
                         <td class="py-3 px-4 text-right font-bold text-white">
                             R$ {{ "%.2f"|format(b.amount) }}
                         </td>
-                        <td class="py-3 px-4 text-center">
+                        <td class="py-3 px-4 text-center space-x-1">
+                            <button type="button"
+                                    onclick="openEditContaModal(this)"
+                                    data-id="{{ b.id }}"
+                                    data-name="{{ b.name }}"
+                                    data-category="{{ b.category }}"
+                                    data-amount="{{ '%.2f'|format(b.amount) }}"
+                                    data-duedate="{{ b.due_date.strftime('%Y-%m-%d') if b.due_date and b.due_date.strftime else (b.due_date or '') }}"
+                                    data-username="{{ b.user_name or 'bruno' }}"
+                                    title="Editar conta"
+                                    class="px-2 py-1 rounded text-xs font-sans transition bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 inline-block">
+                                ✏️
+                            </button>
                             <button hx-post="/contas/toggle/{{ b.id }}?mes_ano={{ mes_ano_input }}&user_name={{ active_user_filter or '' }}"
                                     hx-target="#bills-table-container" hx-swap="outerHTML"
                                     class="px-2.5 py-1 rounded text-xs font-sans transition {% if b.is_paid %}bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700{% else %}bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-sm{% endif %}">
@@ -190,4 +202,78 @@
         </form>
     </div>
 </div>
+
+<!-- Modal: Editar Conta do Mês -->
+<div id="modal-edit-conta" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-base font-bold text-white">Editar Conta / Vencimento</h3>
+            <button onclick="document.getElementById('modal-edit-conta').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+        </div>
+        <form id="edit-conta-form" method="POST" action="" class="space-y-3 text-xs">
+            <input type="hidden" name="mes_ano" value="{{ mes_ano_input }}">
+            <div>
+                <label class="block text-slate-400 mb-1">Nome / Descrição da Conta</label>
+                <input type="text" id="edit-conta-nome" name="descricao" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Valor (R$)</label>
+                    <input type="number" step="0.01" min="0.01" id="edit-conta-valor" name="valor" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Data de Vencimento</label>
+                    <input type="date" id="edit-conta-vencimento" name="data_vencimento" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Categoria</label>
+                    <input type="text" id="edit-conta-categoria" name="categoria" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Responsável / Titular</label>
+                    <select id="edit-conta-user" name="user_name" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                        <option value="bruno">Bruno</option>
+                        <option value="fabiana">Fabiana</option>
+                    </select>
+                </div>
+            </div>
+            <div class="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                <label class="flex items-start space-x-2 cursor-pointer">
+                    <input type="checkbox" name="propagar_futuros" class="mt-0.5 rounded border-slate-700 text-indigo-600 focus:ring-indigo-500 bg-slate-900">
+                    <div class="text-[11px] text-slate-300">
+                        <span class="font-semibold text-white">Propagar para meses futuros</span>
+                        <p class="text-slate-400 text-[10px]">Atualiza o valor e vencimento desta despesa fixa nos próximos meses restantes do ano corrente.</p>
+                    </div>
+                </label>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3">
+                <button type="button" onclick="document.getElementById('modal-edit-conta').classList.add('hidden')"
+                        class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700">Cancelar</button>
+                <button type="submit" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">Salvar Alterações</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openEditContaModal(btn) {
+    const id = btn.dataset.id;
+    const name = btn.dataset.name;
+    const category = btn.dataset.category;
+    const amount = btn.dataset.amount;
+    const duedate = btn.dataset.duedate;
+    const username = btn.dataset.username;
+
+    document.getElementById('edit-conta-form').action = '/contas/edit/' + id;
+    document.getElementById('edit-conta-nome').value = name;
+    document.getElementById('edit-conta-categoria').value = category;
+    document.getElementById('edit-conta-valor').value = amount;
+    document.getElementById('edit-conta-vencimento').value = duedate;
+    document.getElementById('edit-conta-user').value = username;
+
+    document.getElementById('modal-edit-conta').classList.remove('hidden');
+}
+</script>
 {% endblock %}

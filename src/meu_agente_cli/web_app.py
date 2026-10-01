@@ -257,6 +257,35 @@ async def add_conta_action(
     
     return RedirectResponse(url=f"/contas?mes_ano={y:04d}-{m:02d}", status_code=status.HTTP_303_SEE_OTHER)
 
+@app.post("/contas/edit/{record_id}")
+async def edit_conta_action(
+    request: Request,
+    record_id: str,
+    descricao: str = Form(...),
+    valor: float = Form(...),
+    data_vencimento: str = Form(...),
+    categoria: str = Form("Outros"),
+    user_name: str = Form("bruno"),
+    propagar_futuros: Optional[str] = Form(None),
+    mes_ano: Optional[str] = Form(None)
+):
+    m, y, mes_ano_db = parse_month_year(mes_ano)
+    propagate = (propagar_futuros == "on" or propagar_futuros == "true")
+    db.update_monthly_bill(
+        bill_id=record_id,
+        new_amount=float(valor),
+        new_due_date=data_vencimento,
+        propagate_future=propagate,
+        category=categoria,
+        description=descricao,
+        user_name=user_name.strip().lower(),
+        month_year=mes_ano_db
+    )
+    return RedirectResponse(
+        url=f"/contas?mes_ano={y:04d}-{m:02d}&user_name={user_name.strip().lower()}",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
 @app.post("/contas/projetar")
 async def projetar_fixas_action(request: Request, mes_ano: Optional[str] = Form(None), user_name: Optional[str] = Form(None)):
     m, y, _ = parse_month_year(mes_ano)
@@ -381,6 +410,33 @@ async def add_lancamento_action(
         user_name=user_name.strip().lower()
     )
     return RedirectResponse(url=f"/lancamentos?mes_ano={y:04d}-{m:02d}", status_code=status.HTTP_303_SEE_OTHER)
+@app.post("/lancamentos/edit/{record_id}")
+async def edit_lancamento_action(
+    request: Request,
+    record_id: int,
+    tipo: str = Form(...),
+    categoria: str = Form(...),
+    valor: float = Form(...),
+    descricao: str = Form(""),
+    data: Optional[str] = Form(None),
+    user_name: str = Form("bruno"),
+    mes_ano: Optional[str] = Form(None)
+):
+    m, y, _ = parse_month_year(mes_ano)
+    db.update_financial_record(
+        record_id=record_id,
+        amount=float(valor),
+        description=descricao,
+        category=categoria,
+        record_type=tipo,
+        due_date=data,
+        date=data,
+        user_name=user_name.strip().lower()
+    )
+    return RedirectResponse(
+        url=f"/lancamentos?mes_ano={y:04d}-{m:02d}&user_name={user_name.strip().lower()}",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
 
 @app.post("/lancamentos/delete/{record_id}")
 async def delete_lancamento_action(record_id: int, mes_ano: Optional[str] = None, user_name: Optional[str] = None):
@@ -447,6 +503,33 @@ async def add_rf_action(
         valor_inicial=float(valor_investido)
     )
     return RedirectResponse(url="/investimentos", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/investimentos/movimentar_rf")
+async def movimentar_rf_action(
+    id_investimento: int = Form(...),
+    tipo_movimentacao: str = Form(...),
+    valor: float = Form(...),
+    data_movimentacao: Optional[str] = Form(None)
+):
+    invest.add_movimentacao_renda_fixa(
+        id_investimento=int(id_investimento),
+        tipo_movimentacao=tipo_movimentacao,
+        valor=float(valor),
+        data_movimentacao=data_movimentacao
+    )
+    return RedirectResponse(url="/investimentos", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/investimentos/update_saldo_rf/{id_investimento}")
+async def update_saldo_rf_action(
+    id_investimento: int,
+    novo_valor: float = Form(...)
+):
+    invest.update_valor_atual_renda_fixa(
+        id_investimento=int(id_investimento),
+        novo_valor=float(novo_valor)
+    )
+    return RedirectResponse(url="/investimentos", status_code=status.HTTP_303_SEE_OTHER)
+
 
 
 # =====================================================================

@@ -285,9 +285,9 @@ def consultar_investimentos(tipo: str = "todos") -> str:
     resumo = invest.get_resumo_patrimonial_geral()
     linhas = [
         "Resumo Patrimonial de Investimentos:",
-        f"- Renda Fixa: R$ {resumo.get('renda_fixa_saldo', 0.0):.2f}",
-        f"- Ações (Custódia): R$ {resumo.get('acoes_saldo_atual', 0.0):.2f}",
-        f"- Total Consolidado: R$ {resumo.get('total_patrimonio', 0.0):.2f}\n"
+        f"- Renda Fixa: R$ {resumo.get('valor_atual_rf', 0.0):.2f}",
+        f"- Ações (Custódia): R$ {resumo.get('valor_atual_acoes', 0.0):.2f}",
+        f"- Total Consolidado: R$ {resumo.get('valor_atual', 0.0):.2f}\n"
     ]
     
     if tipo_clean in ("acoes", "todos"):
@@ -296,7 +296,7 @@ def consultar_investimentos(tipo: str = "todos") -> str:
             if acoes:
                 linhas.append("Ações em Custódia:")
                 for a in acoes:
-                    linhas.append(f"- {a['codigo_acao']}: Qtd {a['quantidade_custodia']} | Preço Médio R$ {a['preco_medio']:.2f} | Total R$ {a.get('valor_total_custodia', 0.0):.2f}")
+                    linhas.append(f"- ID/Ticker {a['codigo_acao']}: Qtd {a['quantidade_custodia']} | Preço Médio R$ {a['preco_medio']:.2f} | Valor Mercado R$ {a.get('valor_mercado', 0.0):.2f}")
         except Exception as e:
             linhas.append(f"(Não foi possível listar detalhes de ações: {e})")
             
@@ -306,11 +306,115 @@ def consultar_investimentos(tipo: str = "todos") -> str:
             if rf:
                 linhas.append("\nTítulos de Renda Fixa:")
                 for t in rf:
-                    linhas.append(f"- {t['nome_titulo']} ({t['nome_banco']}): R$ {t['valor_atual']:.2f} (Rentabilidade: {t.get('rentabilidade_pct', 0.0):.2f}%)")
+                    linhas.append(f"- #{t['id']} {t['nome_titulo']} ({t['nome_banco']}): R$ {t['valor_atual']:.2f} (Rentabilidade: {t.get('rentabilidade_pct', 0.0):.2f}%)")
         except Exception as e:
             linhas.append(f"(Não foi possível listar detalhes de renda fixa: {e})")
             
     return "\n".join(linhas)
+
+
+@mcp_server.tool(
+    name="atualizar_registro_financeiro",
+    description="Altera os dados de um lançamento financeiro existente (gasto diário, receita ou compra). Útil quando o usuário corrigir o valor de uma despesa, trocar o titular ('bruno' ou 'fabiana'), mudar a categoria, data ou descrição. Parâmetros: record_id (int, obrigatório), novo_valor (float, opcional), nova_descricao (str, opcional), nova_categoria (str, opcional), nova_data (str, opcional YYYY-MM-DD), novo_titular (str, opcional 'bruno' ou 'fabiana')."
+)
+@audit_tool("atualizar_registro_financeiro")
+def atualizar_registro_financeiro(
+    record_id: int,
+    novo_valor: Optional[float] = None,
+    nova_descricao: Optional[str] = None,
+    nova_categoria: Optional[str] = None,
+    nova_data: Optional[str] = None,
+    novo_titular: Optional[str] = None
+) -> str:
+    existente = db.get_financial_record_by_id(record_id)
+    if not existente:
+        return f"[ERRO] Registro financeiro #{record_id} não encontrado ou inativo."
+        
+    ok = db.update_financial_record(
+        record_id=record_id,
+        description=nova_descricao,
+        category=nova_categoria,
+        amount=novo_valor,
+        date=nova_data,
+        due_date=nova_data,
+        user_name=novo_titular
+    )
+    if ok:
+        detalhes = []
+        if novo_valor is not None: detalhes.append(f"Valor: R$ {novo_valor:.2f}")
+        if nova_descricao is not None: detalhes.append(f"Descrição: '{nova_descricao}'")
+        if nova_categoria is not None: detalhes.append(f"Categoria: '{nova_categoria}'")
+        if nova_data is not None: detalhes.append(f"Data: '{nova_data}'")
+        if novo_titular is not None: detalhes.append(f"Titular: '{novo_titular.capitalize()}'")
+        return f"[SUCESSO] Registro #{record_id} atualizado com sucesso! Alterações: {', '.join(detalhes)}."
+    return f"[ERRO] Falha ao atualizar registro financeiro #{record_id}."
+
+
+@mcp_server.tool(
+    name="atualizar_conta_mensal",
+    description="Altera o valor e/ou vencimento de uma conta mensal fixa ou fatura. Permite atualizar apenas o mês atual ou propagar o reajuste para todos os meses seguintes do ano. Parâmetros: record_id (int, obrigatório), novo_valor (float, obrigatório), novo_vencimento (str, opcional YYYY-MM-DD), propagar_meses_futuros (bool, opcional padrão False), novo_titular (str, opcional 'bruno' ou 'fabiana')."
+)
+@audit_tool("atualizar_conta_mensal")
+def atualizar_conta_mensal(
+    record_id: int,
+    novo_valor: float,
+    novo_vencimento: Optional[str] = None,
+    propagar_meses_futuros: bool = False,
+    novo_titular: Optional[str] = None
+) -> str:
+    existente = db.get_financial_record_by_id(record_id)
+    if not existente:
+        return f"[ERRO] Conta #{record_id} não encontrada ou inativa."
+        
+    ok = db.update_monthly_bill(
+        record_id=record_id,
+        new_amount=novo_valor,
+        new_due_date=novo_vencimento,
+        propagate_future=propagar_meses_futuros,
+        user_name=novo_titular
+    )
+    if ok:
+        msg = f"[SUCESSO] Conta #{record_id} atualizada para R$ {novo_valor:.2f}."
+        if propagar_meses_futuros:
+            msg += " O novo valor foi propagado para os meses posteriores deste ano."
+        return msg
+    return f"[ERRO] Falha ao atualizar conta #{record_id}."
+
+
+@mcp_server.tool(
+    name="movimentar_renda_fixa",
+    description="Registra uma nova movimentação em um título de Renda Fixa existente. Parâmetros: id_investimento (int, obrigatório), tipo_movimentacao (str, obrigatório: 'APORTE', 'RESGATE', 'JUROS_RECEBIDOS' ou 'IMPOSTO'), valor (float, positivo), data (str, opcional YYYY-MM-DD)."
+)
+@audit_tool("movimentar_renda_fixa")
+def movimentar_renda_fixa(
+    id_investimento: int,
+    tipo_movimentacao: str,
+    valor: float,
+    data: Optional[str] = None
+) -> str:
+    ok, msg = invest.add_movimentacao_renda_fixa(
+        id_investimento=id_investimento,
+        tipo_movimentacao=tipo_movimentacao,
+        valor=valor,
+        data_movimentacao=data
+    )
+    return f"[SUCESSO] {msg}" if ok else f"[ERRO] {msg}"
+
+
+@mcp_server.tool(
+    name="atualizar_saldo_renda_fixa",
+    description="Atualiza a cotação/saldo de mercado atual de um título de Renda Fixa (ex: atualizar o saldo consolidado do Tesouro Direto ou CDB conforme o extrato bancário). Parâmetros: id_investimento (int, obrigatório), novo_valor (float, obrigatório, maior ou igual a zero)."
+)
+@audit_tool("atualizar_saldo_renda_fixa")
+def atualizar_saldo_renda_fixa(
+    id_investimento: int,
+    novo_valor: float
+) -> str:
+    ok, msg = invest.update_valor_atual_renda_fixa(
+        id_investimento=id_investimento,
+        novo_valor=novo_valor
+    )
+    return f"[SUCESSO] {msg}" if ok else f"[ERRO] {msg}"
 
 
 # =====================================================================

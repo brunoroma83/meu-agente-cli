@@ -80,7 +80,7 @@
                         <th class="py-3 px-4">Descrição</th>
                         <th class="py-3 px-4">Titular</th>
                         <th class="py-3 px-4 text-right">Valor</th>
-                        <th class="py-3 px-4 text-center">Excluir</th>
+                        <th class="py-3 px-4 text-center">Ações</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-800/60 font-mono">
@@ -114,10 +114,24 @@
                         <td class="py-3 px-4 text-right font-bold {% if r.type == 'receita' %}text-emerald-400{% else %}text-white{% endif %}">
                             R$ {{ "%.2f"|format(r.amount) }}
                         </td>
-                        <td class="py-3 px-4 text-center">
+                        <td class="py-3 px-4 text-center space-x-1">
+                            <button type="button"
+                                    onclick="openEditLancamentoModal(this)"
+                                    data-id="{{ r.id }}"
+                                    data-type="{{ r.type }}"
+                                    data-category="{{ r.category }}"
+                                    data-amount="{{ '%.2f'|format(r.amount) }}"
+                                    data-description="{{ r.description }}"
+                                    data-date="{{ r.date.strftime('%Y-%m-%d') if r.date and r.date.strftime else (r.date or '') }}"
+                                    data-username="{{ r.user_name or 'bruno' }}"
+                                    title="Editar lançamento"
+                                    class="text-indigo-400 hover:text-indigo-300 hover:bg-indigo-950/40 p-1 rounded transition text-xs">
+                                ✏️
+                            </button>
                             <button hx-post="/lancamentos/delete/{{ r.id }}?mes_ano={{ mes_ano_input }}&user_name={{ active_user_filter or '' }}"
                                     hx-target="#records-table-container" hx-swap="outerHTML"
                                     hx-confirm="Tem certeza que deseja excluir o lançamento #{{ r.id }}?"
+                                    title="Excluir lançamento"
                                     class="text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 p-1 rounded transition text-xs">
                                 🗑️
                             </button>
@@ -135,4 +149,79 @@
         </div>
     </div>
 </div>
+
+<!-- Modal: Editar Lançamento -->
+<div id="modal-edit-lancamento" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-base font-bold text-white">Editar Lançamento #<span id="edit-lanc-id-display"></span></h3>
+            <button onclick="document.getElementById('modal-edit-lancamento').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+        </div>
+        <form id="edit-lanc-form" method="POST" action="" class="space-y-3 text-xs">
+            <input type="hidden" name="mes_ano" value="{{ mes_ano_input }}">
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Tipo</label>
+                    <select id="edit-lanc-tipo" name="tipo" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                        <option value="despesa">🔴 Despesa</option>
+                        <option value="receita">🟢 Receita</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Categoria</label>
+                    <input type="text" id="edit-lanc-categoria" name="categoria" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Valor (R$)</label>
+                    <input type="number" step="0.01" min="0.01" id="edit-lanc-valor" name="valor" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Data</label>
+                    <input type="date" id="edit-lanc-data" name="data" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                </div>
+            </div>
+            <div>
+                <label class="block text-slate-400 mb-1">Descrição</label>
+                <input type="text" id="edit-lanc-descricao" name="descricao" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-slate-400 mb-1">Responsável</label>
+                <select id="edit-lanc-user" name="user_name" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                    <option value="bruno">Bruno</option>
+                    <option value="fabiana">Fabiana</option>
+                </select>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3">
+                <button type="button" onclick="document.getElementById('modal-edit-lancamento').classList.add('hidden')"
+                        class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700">Cancelar</button>
+                <button type="submit" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">Salvar Alterações</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openEditLancamentoModal(btn) {
+    const id = btn.dataset.id;
+    const type = btn.dataset.type;
+    const category = btn.dataset.category;
+    const amount = btn.dataset.amount;
+    const description = btn.dataset.description;
+    const date = btn.dataset.date;
+    const username = btn.dataset.username;
+
+    document.getElementById('edit-lanc-id-display').textContent = id;
+    document.getElementById('edit-lanc-form').action = '/lancamentos/edit/' + id;
+    document.getElementById('edit-lanc-tipo').value = type;
+    document.getElementById('edit-lanc-categoria').value = category;
+    document.getElementById('edit-lanc-valor').value = amount;
+    document.getElementById('edit-lanc-descricao').value = description;
+    document.getElementById('edit-lanc-data').value = date;
+    document.getElementById('edit-lanc-user').value = username;
+
+    document.getElementById('modal-edit-lancamento').classList.remove('hidden');
+}
+</script>
 {% endblock %}
