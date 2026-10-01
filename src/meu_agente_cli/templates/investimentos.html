@@ -70,11 +70,11 @@
                         </td>
                         <td class="py-2.5 px-3">{{ a.quantidade_custodia }}</td>
                         <td class="py-2.5 px-3">R$ {{ "%.2f"|format(a.preco_medio) }}</td>
-                        <td class="py-2.5 px-3 text-slate-400">R$ {{ "%.2f"|format(a.preco_mercado) }}</td>
-                        <td class="py-2.5 px-3 text-slate-400">R$ {{ "%.2f"|format(a.total_investido_liquido) }}</td>
-                        <td class="py-2.5 px-3 text-right font-bold text-white">R$ {{ "%.2f"|format(a.valor_atual) }}</td>
-                        <td class="py-2.5 px-3 text-right font-bold {% if a.lucro_prejuizo >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-                            R$ {{ "%.2f"|format(a.lucro_prejuizo) }} ({{ "%.2f"|format(a.rentabilidade_pct) }}%)
+                        <td class="py-2.5 px-3 text-slate-400">R$ {{ "%.2f"|format(a.cotacao_atual) }}</td>
+                        <td class="py-2.5 px-3 text-slate-400">R$ {{ "%.2f"|format(a.custo_total) }}</td>
+                        <td class="py-2.5 px-3 text-right font-bold text-white">R$ {{ "%.2f"|format(a.valor_mercado) }}</td>
+                        <td class="py-2.5 px-3 text-right font-bold {% if a.lucro_nao_realizado >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+                            R$ {{ "%.2f"|format(a.lucro_nao_realizado) }} ({{ "%.2f"|format(a.rentabilidade_pct) }}%)
                         </td>
                     </tr>
                     {% else %}
