@@ -34,88 +34,130 @@
         .htmx-request.htmx-indicator { display: inline-block; }
     </style>
 </head>
-<body class="h-full flex flex-col font-sans antialiased bg-slate-950 text-slate-200">
-    <!-- Navbar -->
-    <header class="sticky top-0 z-50 bg-slate-900/90 backdrop-blur border-b border-slate-800">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex items-center justify-between h-16">
-                <!-- Logo & Brand -->
-                <div class="flex items-center space-x-3">
-                    <a href="/dashboard" class="flex items-center space-x-2 text-indigo-400 hover:text-indigo-300 font-bold text-lg">
-                        <span class="p-2 bg-indigo-600/20 text-indigo-400 rounded-lg border border-indigo-500/30">💰</span>
-                        <span>Meu Financeiro</span>
-                    </a>
-                    <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">MCP v2</span>
-                </div>
+<body class="min-h-full bg-slate-950 text-slate-200 antialiased font-sans flex flex-col md:flex-row">
 
-                <!-- Navigation Tabs Desktop -->
-                <nav class="hidden md:flex space-x-1 lg:space-x-2">
-                    <a href="/dashboard?user_name={{ active_user_filter or '' }}" 
-                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'dashboard' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
-                        📊 Dashboard
-                    </a>
-                    <a href="/contas?user_name={{ active_user_filter or '' }}" 
-                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'contas' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
-                        📅 Contas do Mês
-                    </a>
-                    <a href="/cartoes?user_name={{ active_user_filter or '' }}" 
-                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'cartoes' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
-                        💳 Cartões
-                    </a>
-                    <a href="/lancamentos?user_name={{ active_user_filter or '' }}" 
-                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'lancamentos' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
-                        💵 Receitas & Gastos
-                    </a>
-                    <a href="/investimentos" 
-                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'investimentos' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
-                        📈 Investimentos
-                    </a>
-                    <a href="/tokens" 
-                       class="px-3 py-2 rounded-md text-sm font-medium transition-colors {% if current_page == 'tokens' %}bg-indigo-600 text-white shadow{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
-                        🔑 Tokens MCP & Auditoria
-                    </a>
-                </nav>
+    <!-- Mobile Topbar -->
+    <div class="md:hidden sticky top-0 z-40 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between">
+        <a href="/dashboard" class="flex items-center space-x-2 text-indigo-400 font-bold">
+            <span class="p-1.5 bg-indigo-600/20 text-indigo-400 rounded-lg border border-indigo-500/30">💰</span>
+            <span class="text-base text-white">Meu Financeiro</span>
+        </a>
+        <button type="button" onclick="document.getElementById('sidebar-menu').classList.toggle('-translate-x-full')" 
+                class="p-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+            </svg>
+        </button>
+    </div>
 
-                <!-- User Filter & Auth Info -->
-                <div class="flex items-center space-x-3">
-                    <!-- Seletor de Titular / Filtro -->
-                    <form method="GET" action="{{ request.url.path }}" class="flex items-center">
-                        <select name="user_name" onchange="this.form.submit()" 
-                                class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:ring-indigo-500 focus:border-indigo-500">
-                            <option value="" {% if not active_user_filter %}selected{% endif %}>👥 Todos (Familiar)</option>
-                            <option value="bruno" {% if active_user_filter == 'bruno' %}selected{% endif %}>🧑 Bruno</option>
-                            <option value="fabiana" {% if active_user_filter == 'fabiana' %}selected{% endif %}>👩 Fabiana</option>
-                        </select>
-                    </form>
+    <!-- Left Sidebar (Desktop & Mobile Drawer) -->
+    <aside id="sidebar-menu" 
+           class="fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 border-r border-slate-800 flex flex-col transition-transform duration-200 ease-in-out -translate-x-full md:translate-x-0">
+        
+        <!-- Sidebar Brand -->
+        <div class="h-16 px-5 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/50">
+            <a href="/dashboard" class="flex items-center space-x-2.5 text-indigo-400 hover:text-indigo-300 font-bold text-lg">
+                <span class="p-1.5 bg-indigo-600/20 text-indigo-400 rounded-lg border border-indigo-500/30 text-base">💰</span>
+                <span class="tracking-tight text-white">Meu Financeiro</span>
+            </a>
+            <span class="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">MCP v2</span>
+        </div>
 
-                    <!-- Logged User Badge -->
-                    <div class="hidden sm:flex items-center space-x-2 pl-2 border-l border-slate-800">
-                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-800 text-indigo-300 border border-slate-700">
-                            👤 {{ user.display_name if user else 'Usuário' }}
-                        </span>
-                        <a href="/logout" title="Sair da Conta" class="text-xs text-rose-400 hover:text-rose-300 px-2 py-1 rounded hover:bg-rose-950/40 border border-rose-900/40 transition">
-                            Sair
-                        </a>
+        <!-- User Profile & Titular Filter Section -->
+        <div class="p-4 border-b border-slate-800/80 bg-slate-950/40 space-y-3">
+            <!-- User Status Card -->
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-2.5 overflow-hidden">
+                    <div class="w-8 h-8 rounded-full bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-bold text-sm shrink-0">
+                        {{ (user.display_name if user else 'U')[0]|upper }}
+                    </div>
+                    <div class="truncate">
+                        <div class="text-xs font-semibold text-slate-100 truncate">{{ user.display_name if user else 'Usuário' }}</div>
+                        <div class="flex items-center space-x-1.5">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                            <span class="text-[10px] text-slate-400">Online</span>
+                        </div>
                     </div>
                 </div>
+                <a href="/logout" title="Sair da Conta" class="text-xs text-rose-400 hover:text-rose-300 px-2 py-1 rounded bg-rose-950/30 hover:bg-rose-950/60 border border-rose-900/40 transition">
+                    Sair
+                </a>
+            </div>
+
+            <!-- Titular Filter Selector -->
+            <div>
+                <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                    Visualização / Titular
+                </label>
+                <form method="GET" action="{{ request.url.path }}">
+                    <select name="user_name" onchange="this.form.submit()" 
+                            class="w-full bg-slate-800/90 border border-slate-700/80 text-slate-200 text-xs rounded-lg px-2.5 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition">
+                        <option value="" {% if not active_user_filter %}selected{% endif %}>👥 Todos (Familiar)</option>
+                        <option value="bruno" {% if active_user_filter == 'bruno' %}selected{% endif %}>🧑 Bruno</option>
+                        <option value="fabiana" {% if active_user_filter == 'fabiana' %}selected{% endif %}>👩 Fabiana</option>
+                    </select>
+                </form>
             </div>
         </div>
 
-        <!-- Mobile Navigation Submenu -->
-        <div class="md:hidden flex overflow-x-auto py-2 px-4 space-x-2 border-t border-slate-800 bg-slate-900/60 scrollbar-none">
-            <a href="/dashboard?user_name={{ active_user_filter or '' }}" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'dashboard' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">📊 Dashboard</a>
-            <a href="/contas?user_name={{ active_user_filter or '' }}" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'contas' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">📅 Contas</a>
-            <a href="/cartoes?user_name={{ active_user_filter or '' }}" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'cartoes' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">💳 Cartões</a>
-            <a href="/lancamentos?user_name={{ active_user_filter or '' }}" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'lancamentos' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">💵 Gastos</a>
-            <a href="/investimentos" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'investimentos' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">📈 Invest</a>
-            <a href="/tokens" class="px-2.5 py-1 text-xs rounded whitespace-nowrap {% if current_page == 'tokens' %}bg-indigo-600 text-white{% else %}text-slate-300 bg-slate-800{% endif %}">🔑 MCP</a>
-        </div>
-    </header>
+        <!-- Navigation Links -->
+        <nav class="flex-1 px-3 py-4 space-y-1.5 overflow-y-auto">
+            <a href="/dashboard?user_name={{ active_user_filter or '' }}" 
+               class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all group {% if current_page == 'dashboard' %}bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
+                <span class="mr-3 text-base group-hover:scale-110 transition-transform">📊</span>
+                <span>Dashboard</span>
+            </a>
 
-    <!-- Main Content -->
-    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {% block content %}{% endblock %}
-    </main>
+            <a href="/contas?user_name={{ active_user_filter or '' }}" 
+               class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all group {% if current_page == 'contas' %}bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
+                <span class="mr-3 text-base group-hover:scale-110 transition-transform">📅</span>
+                <span>Contas do Mês</span>
+            </a>
+
+            <a href="/cartoes?user_name={{ active_user_filter or '' }}" 
+               class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all group {% if current_page == 'cartoes' %}bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
+                <span class="mr-3 text-base group-hover:scale-110 transition-transform">💳</span>
+                <span>Cartões de Crédito</span>
+            </a>
+
+            <a href="/lancamentos?user_name={{ active_user_filter or '' }}" 
+               class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all group {% if current_page == 'lancamentos' %}bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
+                <span class="mr-3 text-base group-hover:scale-110 transition-transform">💵</span>
+                <span>Receitas & Gastos</span>
+            </a>
+
+            <a href="/investimentos" 
+               class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all group {% if current_page == 'investimentos' %}bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
+                <span class="mr-3 text-base group-hover:scale-110 transition-transform">📈</span>
+                <span>Investimentos</span>
+            </a>
+
+            <a href="/tokens" 
+               class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all group {% if current_page == 'tokens' %}bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
+                <span class="mr-3 text-base group-hover:scale-110 transition-transform">🔑</span>
+                <span>Tokens MCP & Logs</span>
+            </a>
+        </nav>
+
+        <!-- Sidebar Footer Status -->
+        <div class="p-3.5 border-t border-slate-800/80 bg-slate-950/40 text-[11px] text-slate-400 space-y-1">
+            <div class="flex items-center justify-between">
+                <span class="font-medium text-slate-300">MCP Server</span>
+                <span class="inline-flex items-center text-emerald-400 font-semibold">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse"></span>
+                    Ativo
+                </span>
+            </div>
+            <div class="text-[10px] text-slate-500 font-mono">Porta 8000 • /sse</div>
+        </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <div class="flex-1 md:pl-64 flex flex-col min-w-0">
+        <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
 
     <!-- Toast Notifications Container -->
     <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col space-y-2 pointer-events-none"></div>
