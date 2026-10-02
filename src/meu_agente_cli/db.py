@@ -2036,12 +2036,7 @@ def add_cron_job(name: str, cron_expression: str, task_prompt: str) -> bool:
         prompt_clean = clean_string(task_prompt)
         # Valida a expressão cron e calcula o próximo disparo
         base_time = datetime.now()
-        try:
-            from croniter import croniter
-            iter = croniter(cron_expression, base_time)
-            next_run = iter.get_next(datetime)
-        except Exception:
-            next_run = base_time
+        next_run = base_time
         
         conn = get_connection()
         with conn.cursor() as cur:
@@ -2162,8 +2157,7 @@ def ensure_daily_finance_cron() -> bool:
             if row:
                 job_id, cron_expr, active = row
                 if not active or cron_expr != "0 11 * * *":
-                    from croniter import croniter
-                    next_run = croniter("0 11 * * *", datetime.now()).get_next(datetime)
+                    next_run = datetime.now()
                     cur.execute(
                         "UPDATE cron_jobs SET cron_expression = '0 11 * * *', next_run = %s, active = TRUE, status = 'active' WHERE id = %s",
                         (next_run, job_id)
