@@ -298,7 +298,14 @@ async def projetar_fixas_action(request: Request, mes_ano: Optional[str] = Form(
 # =====================================================================
 
 @app.get("/cartoes", response_class=HTMLResponse)
-async def cartoes_view(request: Request, cartao: Optional[str] = None, mes_ano: Optional[str] = None, user_name: Optional[str] = None):
+async def cartoes_view(
+    request: Request,
+    cartao: Optional[str] = None,
+    mes_ano: Optional[str] = None,
+    user_name: Optional[str] = None,
+    msg: Optional[str] = None,
+    error: Optional[str] = None
+):
     user = request.state.user
     m, y, mes_ano_db = parse_month_year(mes_ano)
     mes_ano_input = f"{y:04d}-{m:02d}"
@@ -310,6 +317,9 @@ async def cartoes_view(request: Request, cartao: Optional[str] = None, mes_ano: 
     purchases = db.get_card_purchases(card_name=selected_card, month_year=mes_ano_db, user_name=u_filter)
     total_fatura = sum(p["amount"] for p in purchases)
     
+    # Carrega todos os cartões cadastrados para a área de gestão
+    registered_cards = db.list_credit_cards(active_only=False, user_name=u_filter)
+    
     return templates.TemplateResponse(request=request, name="cartoes.html", context={
         "user": user,
         "current_page": "cartoes",
@@ -318,7 +328,10 @@ async def cartoes_view(request: Request, cartao: Optional[str] = None, mes_ano: 
         "available_cards": available_cards,
         "selected_card": selected_card,
         "purchases": purchases,
-        "total_fatura": total_fatura
+        "total_fatura": total_fatura,
+        "registered_cards": registered_cards,
+        "feedback_msg": msg,
+        "feedback_error": error
     })
 
 @app.post("/cartoes/add")
@@ -335,7 +348,7 @@ async def add_compra_cartao_action(
     cartao_filtro: Optional[str] = Form(None)
 ):
     m, y, _ = parse_month_year(mes_ano)
-    db.add_card_purchase(
+    ok, msg = db.add_card_purchase(
         card_name=cartao,
         category=categoria,
         total_amount=float(valor),
@@ -344,10 +357,69 @@ async def add_compra_cartao_action(
         buy_date_str=data_compra,
         user_name=user_name.strip().lower()
     )
-    return RedirectResponse(
-        url=f"/cartoes?cartao={cartao_filtro or cartao}&mes_ano={y:04d}-{m:02d}",
-        status_code=status.HTTP_303_SEE_OTHER
+    url = f"/cartoes?cartao={cartao_filtro or cartao}&mes_ano={y:04d}-{m:02d}"
+    if not ok:
+        import urllib.parse
+        url += f"&error={urllib.parse.quote(msg)}"
+    return RedirectResponse(url=url, status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/cartoes/manage/add")
+async def create_card_action(
+    request: Request,
+    nome: str = Form(...),
+    banco: str = Form(...),
+    dia_vencimento: int = Form(...),
+    dia_fechamento: Optional[int] = Form(None),
+    user_name: str = Form("bruno")
+):
+    ok, msg = db.create_credit_card(
+        name=nome,
+        bank=banco,
+        due_day=int(dia_vencimento),
+        closing_day=int(dia_fechamento) if dia_fechamento else None,
+        user_name=user_name.strip().lower()
     )
+    import urllib.parse
+    param = "msg" if ok else "error"
+    return RedirectResponse(url=f"/cartoes?{param}={urllib.parse.quote(msg)}", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/cartoes/manage/edit/{card_id}")
+async def edit_card_action(
+    card_id: int,
+    nome: str = Form(...),
+    banco: str = Form(...),
+    dia_vencimento: int = Form(...),
+    dia_fechamento: Optional[int] = Form(None),
+    user_name: str = Form("bruno"),
+    active: Optional[str] = Form(None)
+):
+    is_active = (active == "on" or active == "true")
+    ok, msg = db.update_credit_card(
+        card_id=card_id,
+        name=nome,
+        bank=banco,
+        due_day=int(dia_vencimento),
+        closing_day=int(dia_fechamento) if dia_fechamento else None,
+        user_name=user_name.strip().lower(),
+        active=is_active
+    )
+    import urllib.parse
+    param = "msg" if ok else "error"
+    return RedirectResponse(url=f"/cartoes?{param}={urllib.parse.quote(msg)}", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/cartoes/manage/toggle/{card_id}")
+async def toggle_card_action(card_id: int):
+    ok, msg = db.toggle_credit_card_active(card_id)
+    import urllib.parse
+    param = "msg" if ok else "error"
+    return RedirectResponse(url=f"/cartoes?{param}={urllib.parse.quote(msg)}", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/cartoes/manage/delete/{card_id}")
+async def delete_card_action(card_id: int):
+    ok, msg = db.delete_credit_card(card_id)
+    import urllib.parse
+    param = "msg" if ok else "error"
+    return RedirectResponse(url=f"/cartoes?{param}={urllib.parse.quote(msg)}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # =====================================================================

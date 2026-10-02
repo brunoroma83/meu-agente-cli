@@ -139,7 +139,7 @@ def registrar_despesas_lote(itens: List[Dict[str, Any]], user_name: str = "bruno
 
 @mcp_server.tool(
     name="comprar_no_cartao",
-    description="Registra uma compra no cartão de crédito, calculando automaticamente as parcelas e faturas futuras. Parâmetros: cartao (nome do cartão, ex: 'BB', 'Itaú', 'Porto'), valor, parcelas (default 1), categoria, descricao, data_compra (YYYY-MM-DD, opcional) e user_name ('bruno' ou 'fabiana')."
+    description="Registra uma compra no cartão de crédito, calculando automaticamente as parcelas e faturas futuras. O cartão deve estar previamente cadastrado no sistema (use 'listar_cartoes_credito' para consultar os disponíveis). Parâmetros: cartao (nome do cartão, ex: 'BB', 'Itaú', 'Porto Seguro'), valor, parcelas (default 1), categoria, descricao, data_compra (YYYY-MM-DD, opcional) e user_name ('bruno' ou 'fabiana')."
 )
 @audit_tool("comprar_no_cartao")
 def comprar_no_cartao(
@@ -153,7 +153,7 @@ def comprar_no_cartao(
 ) -> str:
     if valor <= 0:
         return "[ERRO] O valor deve ser maior que zero."
-    ok = db.add_card_purchase(
+    ok, msg = db.add_card_purchase(
         card_name=cartao,
         category=categoria,
         total_amount=valor,
@@ -163,8 +163,29 @@ def comprar_no_cartao(
         user_name=user_name
     )
     if ok:
-        return f"[SUCESSO] Compra de R$ {valor:.2f} ({parcelas}x) registrada no cartão '{cartao}' para '{user_name.capitalize()}'."
-    return f"[ERRO] Falha ao registrar compra no cartão '{cartao}'."
+        return f"[SUCESSO] {msg}"
+    return f"[ERRO] {msg} Novos cartões devem ser cadastrados exclusivamente pela interface Web em /cartoes."
+
+
+@mcp_server.tool(
+    name="listar_cartoes_credito",
+    description="Lista todos os cartões de crédito ativos cadastrados no sistema, seus bancos emissores, dias de vencimento e fechamento, e titulares ('bruno' ou 'fabiana'). Use para verificar os cartões válidos antes de registrar compras ou para tirar dúvidas do usuário."
+)
+@audit_tool("listar_cartoes_credito")
+def listar_cartoes_credito(user_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    cards = db.list_credit_cards(active_only=True, user_name=user_name)
+    return [
+        {
+            "id": c["id"],
+            "nome": c["name"],
+            "banco": c["bank"],
+            "dia_vencimento": c["due_day"],
+            "dia_fechamento": c["closing_day"],
+            "titular": c["user_name"].capitalize(),
+            "compras_ativas": c["purchases_count"]
+        }
+        for c in cards
+    ]
 
 
 @mcp_server.tool(

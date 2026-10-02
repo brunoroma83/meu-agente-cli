@@ -4,39 +4,153 @@
 
 {% block content %}
 <div class="space-y-6">
-    <!-- Header -->
+    <!-- Feedback Alerts -->
+    {% if feedback_msg %}
+    <div class="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 p-3 rounded-xl text-xs flex items-center justify-between">
+        <span>✅ {{ feedback_msg }}</span>
+        <button onclick="this.parentElement.remove()" class="text-emerald-400 hover:text-white">&times;</button>
+    </div>
+    {% endif %}
+    {% if feedback_error %}
+    <div class="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-3 rounded-xl text-xs flex items-center justify-between">
+        <span>⚠️ {{ feedback_error }}</span>
+        <button onclick="this.parentElement.remove()" class="text-rose-400 hover:text-white">&times;</button>
+    </div>
+    {% endif %}
+
+    <!-- Header & Action Bar -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-900 p-4 rounded-xl border border-slate-800">
         <div>
             <h1 class="text-xl font-bold text-white flex items-center space-x-2">
-                <span>Cartões de Crédito & Parcelamentos</span>
+                <span>Cartões de Crédito & Faturas</span>
                 {% if active_user_filter %}
                 <span class="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
                     {{ active_user_filter.capitalize() }}
                 </span>
                 {% endif %}
             </h1>
-            <p class="text-xs text-slate-400">Acompanhe faturas mensais, parcelas futuras e registre novas compras parceladas.</p>
+            <p class="text-xs text-slate-400">Acompanhe faturas mensais, gerencie limites e cadastre cartões autorizados.</p>
         </div>
 
-        <!-- Filter Controls -->
-        <form method="GET" action="/cartoes" class="flex flex-wrap items-center gap-2">
-            <input type="hidden" name="user_name" value="{{ active_user_filter or '' }}">
-            <select name="cartao" onchange="this.form.submit()" 
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
-                <option value="Todos" {% if selected_card == 'Todos' %}selected{% endif %}>💳 Todos os Cartões</option>
-                {% for c in available_cards %}
-                <option value="{{ c }}" {% if selected_card == c %}selected{% endif %}>{{ c }}</option>
-                {% endfor %}
-            </select>
-
-            <input type="month" name="mes_ano" value="{{ mes_ano_input }}" onchange="this.form.submit()"
-                   class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
-                   
-            <button type="button" onclick="document.getElementById('modal-add-card').classList.remove('hidden')"
-                    class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition shadow">
-                + Nova Compra
+        <!-- Filter & Actions -->
+        <div class="flex flex-wrap items-center gap-2">
+            <button type="button" onclick="document.getElementById('modal-create-card').classList.remove('hidden')"
+                    class="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg border border-slate-700 transition flex items-center space-x-1 shadow-sm">
+                <span>💳</span>
+                <span>+ Novo Cartão</span>
             </button>
-        </form>
+
+            <form method="GET" action="/cartoes" class="flex flex-wrap items-center gap-2">
+                <input type="hidden" name="user_name" value="{{ active_user_filter or '' }}">
+                <select name="cartao" onchange="this.form.submit()" 
+                        class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                    <option value="Todos" {% if selected_card == 'Todos' %}selected{% endif %}>💳 Todos os Cartões</option>
+                    {% for c in available_cards %}
+                    <option value="{{ c }}" {% if selected_card == c %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+
+                <input type="month" name="mes_ano" value="{{ mes_ano_input }}" onchange="this.form.submit()"
+                       class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+            </form>
+
+            <button type="button" onclick="document.getElementById('modal-add-purchase').classList.remove('hidden')"
+                    class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition shadow flex items-center space-x-1">
+                <span>+</span>
+                <span>Nova Compra</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Registered Credit Cards Section -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-3">
+        <div class="flex items-center justify-between">
+            <h2 class="text-sm font-bold text-white flex items-center space-x-2">
+                <span>💳 Cartões Cadastrados & Autorizados</span>
+            </h2>
+            <span class="text-xs text-slate-400">{{ registered_cards|length }} cadastrados</span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {% for c in registered_cards %}
+            <div class="bg-slate-950 border {% if c.active %}border-slate-800 hover:border-slate-700{% else %}border-slate-800/40 opacity-60{% endif %} rounded-xl p-4 transition flex flex-col justify-between space-y-3">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <div class="font-bold text-white text-sm flex items-center space-x-1.5">
+                            <span>{{ c.name }}</span>
+                            {% if not c.active %}
+                            <span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">Inativo</span>
+                            {% endif %}
+                        </div>
+                        <div class="text-[11px] text-slate-400 font-sans mt-0.5">{{ c.bank }}</div>
+                    </div>
+                    <span class="px-2 py-0.5 rounded text-[10px] {% if c.user_name == 'bruno' %}bg-blue-500/10 text-blue-400 border border-blue-500/20{% else %}bg-purple-500/10 text-purple-400 border border-purple-500/20{% endif %}">
+                        {{ c.user_name.capitalize() }}
+                    </span>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 text-[11px] bg-slate-900/60 p-2 rounded-lg border border-slate-800/60">
+                    <div>
+                        <span class="text-slate-400 block text-[10px]">Vencimento</span>
+                        <span class="font-bold text-white">Dia {{ c.due_day }}</span>
+                    </div>
+                    <div>
+                        <span class="text-slate-400 block text-[10px]">Fechamento</span>
+                        <span class="font-bold text-slate-300">Dia {{ c.closing_day }}</span>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between pt-1 border-t border-slate-900 text-xs">
+                    <span class="text-[10px] text-slate-400">{{ c.purchases_count }} despesas</span>
+                    <div class="flex items-center space-x-1">
+                        <!-- Botão Editar -->
+                        <button type="button"
+                                onclick="openEditCardModal(this)"
+                                data-id="{{ c.id }}"
+                                data-name="{{ c.name }}"
+                                data-bank="{{ c.bank }}"
+                                data-dueday="{{ c.due_day }}"
+                                data-closingday="{{ c.closing_day }}"
+                                data-username="{{ c.user_name }}"
+                                data-active="{{ 'true' if c.active else 'false' }}"
+                                title="Editar cartão"
+                                class="p-1 rounded text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition text-xs">
+                            ✏️
+                        </button>
+
+                        <!-- Botão Ativar/Desativar -->
+                        <form method="POST" action="/cartoes/manage/toggle/{{ c.id }}" class="inline">
+                            <button type="submit" 
+                                    title="{% if c.active %}Desativar cartão{% else %}Ativar cartão{% endif %}"
+                                    class="p-1 rounded text-slate-400 hover:text-amber-400 hover:bg-slate-800 transition text-xs">
+                                {% if c.active %}⏸️{% else %}▶️{% endif %}
+                            </button>
+                        </form>
+
+                        <!-- Botão Excluir -->
+                        {% if c.purchases_count == 0 %}
+                        <form method="POST" action="/cartoes/manage/delete/{{ c.id }}" class="inline"
+                              onsubmit="return confirm('Deseja realmente excluir o cartão {{ c.name }}? Esta ação não pode ser desfeita.');">
+                            <button type="submit" title="Excluir cartão"
+                                    class="p-1 rounded text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 transition text-xs">
+                                🗑️
+                            </button>
+                        </form>
+                        {% else %}
+                        <span title="Não é possível excluir: existem {{ c.purchases_count }} despesas vinculadas. Apenas a desativação é permitida."
+                              class="p-1 text-slate-600 cursor-not-allowed text-xs">
+                            🔒
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="col-span-full py-6 text-center text-slate-500 text-xs">
+                Nenhum cartão cadastrado. Clique em "+ Novo Cartão" para autorizar o primeiro cartão.
+            </div>
+            {% endfor %}
+        </div>
     </div>
 
     <!-- Total Invoice Pill -->
@@ -103,15 +217,114 @@
     </div>
 </div>
 
+<!-- Modal: Cadastrar Novo Cartão -->
+<div id="modal-create-card" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                <span>💳 Cadastrar Novo Cartão de Crédito</span>
+            </h3>
+            <button onclick="document.getElementById('modal-create-card').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+        </div>
+        <form method="POST" action="/cartoes/manage/add" class="space-y-3 text-xs">
+            <div>
+                <label class="block text-slate-400 mb-1">Nome do Cartão / Apelido</label>
+                <input type="text" name="nome" required placeholder="Ex: Porto Seguro, C6 Carbon, Nubank"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+            </div>
+            <div>
+                <label class="block text-slate-400 mb-1">Banco / Instituição Emissora</label>
+                <input type="text" name="banco" required placeholder="Ex: Porto Bank, C6 Bank, Nubank, Itaú"
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Dia do Vencimento (1 a 31)</label>
+                    <input type="number" min="1" max="31" name="dia_vencimento" required placeholder="10"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Dia do Fechamento (1 a 31)</label>
+                    <input type="number" min="1" max="31" name="dia_fechamento" placeholder="Ex: 3"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+            </div>
+            <div>
+                <label class="block text-slate-400 mb-1">Titular Responsável</label>
+                <select name="user_name" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                    <option value="bruno" {% if active_user_filter == 'bruno' or user.user_name == 'bruno' %}selected{% endif %}>Bruno</option>
+                    <option value="fabiana" {% if active_user_filter == 'fabiana' or user.user_name == 'fabiana' %}selected{% endif %}>Fabiana</option>
+                </select>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3">
+                <button type="button" onclick="document.getElementById('modal-create-card').classList.add('hidden')"
+                        class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700">Cancelar</button>
+                <button type="submit" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">Cadastrar Cartão</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal: Editar Cartão de Crédito -->
+<div id="modal-edit-card" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                <span>✏️ Editar Cartão de Crédito</span>
+            </h3>
+            <button onclick="document.getElementById('modal-edit-card').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+        </div>
+        <form id="form-edit-card" method="POST" action="" class="space-y-3 text-xs">
+            <div>
+                <label class="block text-slate-400 mb-1">Nome do Cartão</label>
+                <input type="text" id="edit-card-nome" name="nome" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+            </div>
+            <div>
+                <label class="block text-slate-400 mb-1">Banco / Emissor</label>
+                <input type="text" id="edit-card-banco" name="banco" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Dia do Vencimento</label>
+                    <input type="number" min="1" max="31" id="edit-card-vencimento" name="dia_vencimento" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Dia do Fechamento</label>
+                    <input type="number" min="1" max="31" id="edit-card-fechamento" name="dia_fechamento" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1">Titular</label>
+                    <select id="edit-card-user" name="user_name" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                        <option value="bruno">Bruno</option>
+                        <option value="fabiana">Fabiana</option>
+                    </select>
+                </div>
+                <div class="flex items-center pt-5">
+                    <label class="flex items-center space-x-2 cursor-pointer">
+                        <input type="checkbox" id="edit-card-active" name="active" class="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500 bg-slate-900">
+                        <span class="text-white text-xs font-medium">Cartão Ativo</span>
+                    </label>
+                </div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3">
+                <button type="button" onclick="document.getElementById('modal-edit-card').classList.add('hidden')"
+                        class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700">Cancelar</button>
+                <button type="submit" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">Salvar Alterações</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Modal: Adicionar Compra no Cartão -->
-<div id="modal-add-card" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+<div id="modal-add-purchase" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
     <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
         <div class="flex justify-between items-center mb-4">
             <h3 class="text-base font-bold text-white">Registrar Compra no Cartão</h3>
-            <button onclick="document.getElementById('modal-add-card').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+            <button onclick="document.getElementById('modal-add-purchase').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
         </div>
-        <form method="POST" action="/cartoes/add" hx-post="/cartoes/add" hx-target="#purchases-table-container" hx-swap="outerHTML"
-              onsubmit="document.getElementById('modal-add-card').classList.add('hidden')" class="space-y-3 text-xs">
+        <form method="POST" action="/cartoes/add" onsubmit="document.getElementById('modal-add-purchase').classList.add('hidden')" class="space-y-3 text-xs">
             <input type="hidden" name="mes_ano" value="{{ mes_ano_input }}">
             <input type="hidden" name="cartao_filtro" value="{{ selected_card }}">
             
@@ -119,8 +332,12 @@
                 <div>
                     <label class="block text-slate-400 mb-1">Cartão de Crédito</label>
                     <select name="cartao" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
-                        {% for c in available_cards %}
-                        <option value="{{ c }}">{{ c }}</option>
+                        {% for c in registered_cards %}
+                        {% if c.active %}
+                        <option value="{{ c.name }}" {% if selected_card == c.name %}selected{% endif %}>
+                            {{ c.name }} ({{ c.bank }} - {{ c.user_name.capitalize() }})
+                        </option>
+                        {% endif %}
                         {% endfor %}
                     </select>
                 </div>
@@ -143,7 +360,7 @@
                 <div>
                     <label class="block text-slate-400 mb-1">Valor Total (R$)</label>
                     <input type="number" step="0.01" min="0.01" name="valor" required placeholder="0.00"
-                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
                 </div>
                 <div>
                     <label class="block text-slate-400 mb-1">Nº de Parcelas</label>
@@ -173,11 +390,33 @@
             </div>
 
             <div class="flex justify-end space-x-2 pt-3">
-                <button type="button" onclick="document.getElementById('modal-add-card').classList.add('hidden')"
+                <button type="button" onclick="document.getElementById('modal-add-purchase').classList.add('hidden')"
                         class="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700">Cancelar</button>
                 <button type="submit" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">Lançar Compra</button>
             </div>
         </form>
     </div>
 </div>
+
+<script>
+function openEditCardModal(btn) {
+    const id = btn.dataset.id;
+    const name = btn.dataset.name;
+    const bank = btn.dataset.bank;
+    const dueday = btn.dataset.dueday;
+    const closingday = btn.dataset.closingday;
+    const username = btn.dataset.username;
+    const active = btn.dataset.active === 'true';
+
+    document.getElementById('form-edit-card').action = '/cartoes/manage/edit/' + id;
+    document.getElementById('edit-card-nome').value = name;
+    document.getElementById('edit-card-banco').value = bank;
+    document.getElementById('edit-card-vencimento').value = dueday;
+    document.getElementById('edit-card-fechamento').value = closingday;
+    document.getElementById('edit-card-user').value = username;
+    document.getElementById('edit-card-active').checked = active;
+
+    document.getElementById('modal-edit-card').classList.remove('hidden');
+}
+</script>
 {% endblock %}

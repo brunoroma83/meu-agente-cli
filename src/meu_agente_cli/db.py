@@ -543,6 +543,49 @@ def init_database() -> bool:
                 WHERE category IN ('Casa', 'Seguro', 'Condominio', 'Condomínio', 'Energia', 'Internet', 'Telefonia', 'Curso', 'Impostos')
                   AND nature = 'daily'
                   AND card_name IS NULL;
+
+                -- 15. Tabela de Cartões de Crédito Cadastrados
+                CREATE TABLE IF NOT EXISTS credit_cards (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL UNIQUE,
+                    bank VARCHAR(100) NOT NULL,
+                    due_day INT NOT NULL CHECK (due_day BETWEEN 1 AND 31),
+                    closing_day INT CHECK (closing_day BETWEEN 1 AND 31),
+                    user_name VARCHAR(50) NOT NULL DEFAULT 'bruno',
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                ALTER TABLE financial_records ADD COLUMN IF NOT EXISTS card_id INTEGER REFERENCES credit_cards(id) ON DELETE RESTRICT;
+            """)
+
+            # Seed inicial de cartões conhecidos/legados se a tabela estiver vazia
+            cur.execute("SELECT COUNT(*) FROM credit_cards")
+            cards_count = cur.fetchone()[0]
+            if cards_count == 0:
+                cur.execute("""
+                    INSERT INTO credit_cards (name, bank, due_day, closing_day, user_name, active) VALUES
+                    ('Porto Seguro', 'Porto Bank', 1, 18, 'bruno', TRUE),
+                    ('C6', 'C6 Bank', 20, 14, 'bruno', TRUE),
+                    ('Itau', 'Itaú', 10, 2, 'bruno', TRUE),
+                    ('BB', 'Banco do Brasil', 10, 29, 'bruno', TRUE)
+                    ON CONFLICT (name) DO NOTHING;
+                """)
+
+            # Backfill para associar card_id em registros históricos existentes
+            cur.execute("""
+                UPDATE financial_records f
+                SET card_id = c.id
+                FROM credit_cards c
+                WHERE f.card_id IS NULL AND f.card_name IS NOT NULL
+                  AND (
+                    LOWER(TRIM(f.card_name)) = LOWER(TRIM(c.name))
+                    OR (c.name = 'Porto Seguro' AND LOWER(TRIM(f.card_name)) IN ('porto', 'porto seguro', 'porto-seguro', 'cartão porto', 'cartao porto'))
+                    OR (c.name = 'BB' AND LOWER(TRIM(f.card_name)) IN ('bb', 'cartão bb', 'cartao bb', 'ourocard'))
+                    OR (c.name = 'Itau' AND LOWER(TRIM(f.card_name)) IN ('itau', 'itaú', 'cartão itau', 'cartao itau', 'cartão itaú'))
+                    OR (c.name = 'C6' AND LOWER(TRIM(f.card_name)) IN ('c6', 'c6 bank', 'cartão c6', 'cartao c6'))
+                  );
             """)
             
         conn.commit()
@@ -1542,28 +1585,227 @@ def update_monthly_bill(
         print(f"[ERROR] Erro ao atualizar conta mensal: {e}", file=sys.stderr)
         return False
 
-def get_distinct_cards() -> List[str]:
-    """Retorna a lista unificada de todos os cartões cadastrados e usados."""
-    cards = set()
-    # Dos settings configurados
-    cfg = get_credit_cards().get("cartoes", {})
-    for c in cfg.keys():
-        if c and c.strip():
-            cards.add(c.strip())
-    # Dos registros do banco
+def list_credit_cards(active_only: bool = True, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retorna os cartões cadastrados com contagem de compras vinculadas."""
     try:
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT card_name FROM financial_records WHERE card_name IS NOT NULL AND card_name != '' AND active = TRUE")
-            for row in cur.fetchall():
-                if row[0] and row[0].strip() and row[0].strip() != "Cartão de Crédito":
-                    cards.add(row[0].strip())
+            sql = """
+                SELECT c.id, c.name, c.bank, c.due_day, c.closing_day, c.user_name, c.active, c.created_at,
+                       COUNT(f.id) AS purchases_count
+                FROM credit_cards c
+                LEFT JOIN financial_records f ON (f.card_id = c.id OR LOWER(TRIM(f.card_name)) = LOWER(TRIM(c.name))) AND f.active = TRUE
+                WHERE 1=1
+            """
+            params = []
+            if active_only:
+                sql += " AND c.active = TRUE"
+            if user_name and user_name.strip():
+                sql += " AND LOWER(c.user_name) = %s"
+                params.append(user_name.strip().lower())
+            sql += " GROUP BY c.id ORDER BY c.name ASC"
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
         conn.close()
-    except Exception:
-        pass
-    if not cards:
-        return ["BB", "C6", "Itau", "Porto-Seguro"]
-    return sorted(list(cards))
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "bank": r[2],
+                "due_day": r[3],
+                "closing_day": r[4] or r[3],
+                "user_name": r[5] or "bruno",
+                "active": r[6],
+                "created_at": r[7],
+                "purchases_count": r[8]
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[ERROR] Erro ao listar cartões de crédito: {e}", file=sys.stderr)
+        return []
+
+def get_credit_card_by_id(card_id: int) -> Optional[Dict[str, Any]]:
+    """Obtém um cartão de crédito pelo seu ID."""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT c.id, c.name, c.bank, c.due_day, c.closing_day, c.user_name, c.active,
+                       COUNT(f.id) AS purchases_count
+                FROM credit_cards c
+                LEFT JOIN financial_records f ON (f.card_id = c.id OR LOWER(TRIM(f.card_name)) = LOWER(TRIM(c.name))) AND f.active = TRUE
+                WHERE c.id = %s
+                GROUP BY c.id
+            """, (card_id,))
+            r = cur.fetchone()
+        conn.close()
+        if not r:
+            return None
+        return {
+            "id": r[0],
+            "name": r[1],
+            "bank": r[2],
+            "due_day": r[3],
+            "closing_day": r[4] or r[3],
+            "user_name": r[5] or "bruno",
+            "active": r[6],
+            "purchases_count": r[7]
+        }
+    except Exception as e:
+        print(f"[ERROR] Erro ao obter cartão de crédito por id: {e}", file=sys.stderr)
+        return None
+
+def find_matching_credit_card(card_query: str, user_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Busca inteligente por cartão de crédito cadastrado e ativo.
+    1. Match exato por nome (case-insensitive).
+    2. Match parcial / substring (ex: 'Porto' -> 'Porto Seguro').
+    Prioriza o usuário titular se informado.
+    """
+    if not card_query or not card_query.strip():
+        return None
+    q = card_query.strip().lower()
+    q_clean = q.replace("cartão", "").replace("cartao", "").replace("de crédito", "").replace("de credito", "").strip()
+    
+    all_cards = list_credit_cards(active_only=True)
+    if not all_cards:
+        return None
+
+    u_filter = user_name.strip().lower() if user_name else None
+    if u_filter:
+        all_cards.sort(key=lambda c: (c["user_name"].lower() != u_filter, c["name"]))
+
+    # 1. Match exato
+    for c in all_cards:
+        c_name = c["name"].lower()
+        if c_name == q or c_name == q_clean:
+            return c
+
+    # 2. Substring match
+    if q_clean:
+        for c in all_cards:
+            c_name = c["name"].lower()
+            if q_clean in c_name or c_name in q_clean:
+                return c
+
+    # 3. Match por banco
+    if q_clean:
+        for c in all_cards:
+            b_name = c["bank"].lower()
+            if q_clean in b_name or b_name in q_clean:
+                return c
+
+    return None
+
+def create_credit_card(name: str, bank: str, due_day: int, closing_day: Optional[int] = None, user_name: str = "bruno") -> Tuple[bool, str]:
+    """Cadastra novo cartão de crédito no banco (exclusivo Web UI)."""
+    try:
+        n = clean_string(name).strip()
+        b = clean_string(bank).strip()
+        u = clean_string(user_name).strip().lower() if user_name else "bruno"
+        d_due = int(due_day)
+        d_close = int(closing_day) if closing_day is not None and int(closing_day) > 0 else (d_due - 7 if d_due > 7 else d_due + 23)
+        if not (1 <= d_due <= 31) or not (1 <= d_close <= 31):
+            return False, "Dias de vencimento e fechamento devem estar entre 1 e 31."
+        if not n:
+            return False, "O nome do cartão é obrigatório."
+        if not b:
+            return False, "O nome do banco/emissor é obrigatório."
+
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO credit_cards (name, bank, due_day, closing_day, user_name, active)
+                VALUES (%s, %s, %s, %s, %s, TRUE)
+            """, (n, b, d_due, d_close, u))
+        conn.commit()
+        conn.close()
+        return True, f"Cartão '{n}' cadastrado com sucesso!"
+    except Exception as e:
+        msg = f"Erro ao cadastrar cartão: {e}"
+        print(f"[ERROR] {msg}", file=sys.stderr)
+        return False, msg
+
+def update_credit_card(card_id: int, name: str, bank: str, due_day: int, closing_day: Optional[int] = None, user_name: str = "bruno", active: bool = True) -> Tuple[bool, str]:
+    """Atualiza dados de um cartão de crédito cadastrado."""
+    try:
+        n = clean_string(name).strip()
+        b = clean_string(bank).strip()
+        u = clean_string(user_name).strip().lower() if user_name else "bruno"
+        d_due = int(due_day)
+        d_close = int(closing_day) if closing_day is not None and int(closing_day) > 0 else d_due
+        if not (1 <= d_due <= 31) or not (1 <= d_close <= 31):
+            return False, "Dias de vencimento e fechamento devem estar entre 1 e 31."
+
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE credit_cards
+                SET name = %s, bank = %s, due_day = %s, closing_day = %s, user_name = %s, active = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (n, b, d_due, d_close, u, active, card_id))
+        conn.commit()
+        conn.close()
+        return True, f"Cartão '{n}' atualizado com sucesso!"
+    except Exception as e:
+        msg = f"Erro ao atualizar cartão: {e}"
+        print(f"[ERROR] {msg}", file=sys.stderr)
+        return False, msg
+
+def toggle_credit_card_active(card_id: int) -> Tuple[bool, str]:
+    """Alterna o status ativo/desativado do cartão."""
+    try:
+        card = get_credit_card_by_id(card_id)
+        if not card:
+            return False, "Cartão não encontrado."
+        new_status = not card["active"]
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE credit_cards SET active = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (new_status, card_id))
+        conn.commit()
+        conn.close()
+        status_txt = "ativado" if new_status else "desativado"
+        return True, f"Cartão '{card['name']}' {status_txt} com sucesso!"
+    except Exception as e:
+        msg = f"Erro ao alternar status do cartão: {e}"
+        print(f"[ERROR] {msg}", file=sys.stderr)
+        return False, msg
+
+def delete_credit_card(card_id: int) -> Tuple[bool, str]:
+    """
+    Exclui fisicamente um cartão apenas se NÃO houver despesas vinculadas a ele.
+    Caso contrário, rejeita o DELETE e orienta a desativação.
+    """
+    try:
+        card = get_credit_card_by_id(card_id)
+        if not card:
+            return False, "Cartão não encontrado."
+
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM financial_records WHERE card_id = %s OR LOWER(TRIM(card_name)) = LOWER(TRIM(%s))", (card_id, card["name"]))
+            count = cur.fetchone()[0]
+            if count > 0:
+                conn.close()
+                return False, f"Não é possível excluir o cartão '{card['name']}' pois existem {count} despesas vinculadas a ele. O cartão pode apenas ser desativado para preservar o histórico."
+
+            cur.execute("DELETE FROM credit_cards WHERE id = %s", (card_id,))
+        conn.commit()
+        conn.close()
+        return True, f"Cartão '{card['name']}' excluído com sucesso!"
+    except Exception as e:
+        msg = f"Erro ao excluir cartão: {e}"
+        print(f"[ERROR] {msg}", file=sys.stderr)
+        return False, msg
+
+def get_distinct_cards() -> List[str]:
+    """Retorna a lista de nomes dos cartões cadastrados e ativos."""
+    cards = list_credit_cards(active_only=True)
+    if cards:
+        return [c["name"] for c in cards]
+    # Fallback caso ainda não migrado
+    return ["Porto Seguro", "C6", "Itau", "BB"]
 
 def get_monthly_bills(month_year: Optional[str] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -1705,19 +1947,24 @@ def add_card_purchase(
     description: str,
     buy_date_str: Optional[str] = None,
     user_name: str = "bruno"
-) -> bool:
-    """Registra uma compra à vista ou parcelada no cartão de crédito, calculando parcelas e faturas futuras."""
-    cards_config = get_credit_cards().get("cartoes", {})
-    card_info = None
-    matched_name = card_name.strip()
-    for name, info in cards_config.items():
-        if name.lower() == card_name.strip().lower():
-            card_info = info
-            matched_name = name
-            break
-            
-    closing_day = card_info.get("closing_day", 1) if card_info else 1
-    due_day = card_info.get("due_day", 10) if card_info else 10
+) -> Tuple[bool, str]:
+    """
+    Registra uma compra à vista ou parcelada no cartão de crédito, calculando parcelas e faturas futuras.
+    Exige validação rigorosa: o cartão deve existir na tabela credit_cards e estar ativo.
+    """
+    u_owner = clean_string(user_name).strip().lower() if user_name else "bruno"
+    matched_card = find_matching_credit_card(card_name, user_name=u_owner)
+    
+    if not matched_card:
+        available = list_credit_cards(active_only=True)
+        avail_str = ", ".join([f"{c['name']} ({c['bank']}, {c['user_name'].capitalize()})" for c in available]) if available else "Nenhum cartão cadastrado"
+        return False, f"Cartão '{card_name}' não encontrado ou inativo. Cartões cadastrados disponíveis: [{avail_str}]."
+
+    card_id = matched_card["id"]
+    matched_name = matched_card["name"]
+    closing_day = matched_card.get("closing_day") or 1
+    due_day = matched_card.get("due_day") or 10
+    card_owner = matched_card.get("user_name") or u_owner
     
     buy_date = datetime.now()
     if buy_date_str and buy_date_str.strip():
@@ -1750,7 +1997,6 @@ def add_card_purchase(
     
     records = []
     import calendar
-    u_owner = clean_string(user_name).strip().lower() if user_name else "bruno"
     for i in range(1, inst_count + 1):
         inst_amount = round(base_inst_val + diff, 2) if i == 1 else base_inst_val
         due_month = first_due_month + (i - 1)
@@ -1773,7 +2019,8 @@ def add_card_purchase(
             due_date,
             "card_purchase",
             matched_name,
-            u_owner
+            card_id,
+            card_owner
         ))
         
     try:
@@ -1781,17 +2028,18 @@ def add_card_purchase(
         with conn.cursor() as cur:
             cur.executemany(
                 """
-                INSERT INTO financial_records (type, category, amount, description, date, due_date, nature, card_name, user_name, is_paid, active)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                INSERT INTO financial_records (type, category, amount, description, date, due_date, nature, card_name, card_id, user_name, is_paid, active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
                 """,
                 records
             )
         conn.commit()
         conn.close()
-        return True
+        return True, f"Compra de R$ {total_amount:.2f} ({inst_count}x) registrada com sucesso no cartão '{matched_name}' para '{card_owner.capitalize()}'."
     except Exception as e:
-        print(f"[ERROR] Erro ao registrar compra no cartão: {e}", file=sys.stderr)
-        return False
+        msg = f"Erro ao registrar compra no cartão: {e}"
+        print(f"[ERROR] {msg}", file=sys.stderr)
+        return False, msg
 
 def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
     """Retorna os lançamentos e parcelas individuais de compras no cartão de crédito com filtro opcional por usuário."""

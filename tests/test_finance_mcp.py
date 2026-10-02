@@ -45,9 +45,14 @@ def test_mcp_server_tools_registered():
         "atualizar_conta_mensal",
         "movimentar_renda_fixa",
         "atualizar_saldo_renda_fixa",
+        "listar_cartoes_credito",
     ]
     for expected in expected_tools:
         assert expected in tool_names
+    # Garante que o agente Hermes NÃO possui ferramentas para criar novos cartões
+    assert "cadastrar_cartao" not in tool_names
+    assert "criar_cartao" not in tool_names
+    assert "adicionar_cartao" not in tool_names
 
 def test_web_app_login_redirect():
     client = TestClient(app)
@@ -225,6 +230,83 @@ def test_web_app_update_saldo_rf(monkeypatch):
     assert res.status_code == 303
     assert called["id_investimento"] == 2
     assert called["novo_valor"] == 10550.25
+
+def test_credit_card_find_matching():
+    import meu_agente_cli.db as db
+    # Cadastrados no seed: Porto Seguro, C6, Itau, BB
+    c1 = db.find_matching_credit_card("Porto Seguro")
+    assert c1 is not None
+    assert c1["name"] == "Porto Seguro"
+
+    # Busca aproximada por substring "Porto"
+    c2 = db.find_matching_credit_card("Porto")
+    assert c2 is not None
+    assert c2["name"] == "Porto Seguro"
+
+    # Busca com "cartao c6"
+    c3 = db.find_matching_credit_card("cartão C6")
+    assert c3 is not None
+    assert c3["name"] == "C6"
+
+    # Cartão inexistente
+    c4 = db.find_matching_credit_card("Cartao Inexistente 123")
+    assert c4 is None
+
+def test_add_card_purchase_rejects_unregistered_card():
+    import meu_agente_cli.db as db
+    ok, msg = db.add_card_purchase(
+        card_name="Cartao Fantasma",
+        category="Outros",
+        total_amount=100.0,
+        installments=1,
+        description="Teste invalido"
+    )
+    assert ok is False
+    assert "não encontrado ou inativo" in msg
+
+def test_delete_credit_card_blocked_when_has_purchases(monkeypatch):
+    import meu_agente_cli.db as db
+    # Mock de cartão com compras vinculadas
+    monkeypatch.setattr(db, "get_credit_card_by_id", lambda cid: {"id": 1, "name": "Porto Seguro", "purchases_count": 5})
+    
+    # Mock do cursor retornando count > 0
+    class MockCur:
+        def execute(self, sql, params): pass
+        def fetchone(self): return [5]
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+    class MockConn:
+        def cursor(self): return MockCur()
+        def close(self): pass
+        def commit(self): pass
+
+    monkeypatch.setattr(db, "get_connection", lambda: MockConn())
+
+    ok, msg = db.delete_credit_card(1)
+    assert ok is False
+    assert "Não é possível excluir o cartão" in msg
+    assert "apenas ser desativado" in msg
+
+def test_mcp_comprar_no_cartao_unregistered_returns_friendly_error():
+    from meu_agente_cli.mcp_server import comprar_no_cartao
+    res = comprar_no_cartao(
+        cartao="Nubank Desconhecido",
+        valor=50.0,
+        descricao="Almoço",
+        user_name="bruno"
+    )
+    assert "[ERRO]" in res
+    assert "não encontrado ou inativo" in res
+    assert "Novos cartões devem ser cadastrados exclusivamente pela interface Web" in res
+
+def test_mcp_listar_cartoes_credito():
+    from meu_agente_cli.mcp_server import listar_cartoes_credito
+    cards = listar_cartoes_credito()
+    assert isinstance(cards, list)
+    assert len(cards) >= 1
+    nomes = [c["nome"] for c in cards]
+    assert "Porto Seguro" in nomes or "C6" in nomes
+
 
 
 
