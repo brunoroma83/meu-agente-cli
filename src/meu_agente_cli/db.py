@@ -2191,7 +2191,7 @@ def get_incomes(month_year: Optional[str] = None, category: Optional[str] = None
     return get_monthly_incomes(month_year=month_year, category=category, query=query, user_name=user_name)
 
 def get_expenses_list(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Retorna despesas ativas excluindo compras de cartão de crédito (já exibidas em Cartões)."""
+    """Retorna apenas despesas diárias rotineiras (nature = 'daily'), excluindo contas fixas (exibidas em Contas do Mês) e compras de cartão de crédito (exibidas em Cartões)."""
     now = datetime.now()
     if month_year and "-" in month_year:
         parts = month_year.split("-")
@@ -2209,7 +2209,7 @@ def get_expenses_list(month_year: Optional[str] = None, category: Optional[str] 
                 WHERE active = TRUE 
                   AND lower(type) = 'despesa'
                   AND card_id IS NULL 
-                  AND (nature IS NULL OR nature != 'card_purchase')
+                  AND lower(nature) = 'daily'
                   AND EXTRACT(MONTH FROM COALESCE(date, due_date)) = %s
                   AND EXTRACT(YEAR FROM COALESCE(date, due_date)) = %s
             """
@@ -2242,11 +2242,11 @@ def get_expenses_list(month_year: Optional[str] = None, category: Optional[str] 
                 })
         conn.close()
     except Exception as e:
-        print(f"[ERROR] Erro ao buscar despesas: {e}", file=sys.stderr)
+        print(f"[ERROR] Erro ao buscar despesas diárias: {e}", file=sys.stderr)
     return expenses
 
 def get_distinct_categories(record_type: str = "despesa") -> List[str]:
-    """Retorna lista de categorias únicas para filtros/formulários, excluindo compras de cartão quando for despesa."""
+    """Retorna lista de categorias únicas para filtros/formulários, considerando apenas despesas diárias se for despesa."""
     categories = []
     try:
         conn = get_connection()
@@ -2258,7 +2258,7 @@ def get_distinct_categories(record_type: str = "despesa") -> List[str]:
                     WHERE active = TRUE 
                       AND lower(type) = 'despesa'
                       AND card_id IS NULL 
-                      AND (nature IS NULL OR nature != 'card_purchase')
+                      AND lower(nature) = 'daily'
                       AND category IS NOT NULL AND category != ''
                     ORDER BY category ASC
                 """

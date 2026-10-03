@@ -457,7 +457,7 @@ def test_web_app_gastos_view_and_card_exclusion():
     # 1. Acesso à página de gastos
     res = client.get("/gastos?mes_ano=2026-10")
     assert res.status_code == 200
-    assert "Gastos & Despesas" in res.text
+    assert "Gastos Diários" in res.text
     assert "Filtrar Gastos" in res.text
 
     # 2. Cadastro de um novo gasto
@@ -475,11 +475,13 @@ def test_web_app_gastos_view_and_card_exclusion():
     assert res_add.status_code == 303
     assert "/gastos" in res_add.headers.get("location")
 
-    # 3. Verifica que compras de cartão de crédito NÃO aparecem na lista de gastos
+    # 3. Verifica que compras de cartão de crédito e contas fixas NÃO aparecem na lista de gastos
     expenses = db.get_expenses_list(month_year="10-2026")
-    # Todas as despesas retornadas devem ter card_id nulo e nature != 'card_purchase'
+    # Todas as despesas retornadas devem ter card_id nulo e nature == 'daily'
     for exp in expenses:
+        assert exp["nature"] == "daily"
         assert exp["nature"] != "card_purchase"
+        assert exp["nature"] != "monthly"
 
 def test_web_app_lancamentos_legacy_redirect():
     client = TestClient(app)
