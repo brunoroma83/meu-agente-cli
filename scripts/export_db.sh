@@ -24,8 +24,8 @@ echo "=========================================================="
 COMPOSE_CMD="docker compose"
 if docker compose ps meu-agente-db 2>/dev/null | grep -q "meu-agente-db"; then
     COMPOSE_CMD="docker compose"
-elif docker compose -f "${PROJECT_DIR}/docker-compose.dev.yml" ps meu-agente-db 2>/dev/null | grep -q "meu-agente-db"; then
-    COMPOSE_CMD="docker compose -f ${PROJECT_DIR}/docker-compose.dev.yml"
+elif docker compose -f "${PROJECT_DIR}/compose.dev.yaml" ps meu-agente-db 2>/dev/null | grep -q "meu-agente-db"; then
+    COMPOSE_CMD="docker compose -f ${PROJECT_DIR}/compose.dev.yaml"
 fi
 
 # Verifica se o container db está respondendo

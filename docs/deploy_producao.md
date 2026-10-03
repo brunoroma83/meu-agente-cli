@@ -184,7 +184,7 @@ server {
 ---
 
 ### C) Traefik (Labels no Docker Compose)
-Se utilizar Traefik, basta descomentar ou adicionar as labels no serviço `dashboard` do `docker-compose.yml`:
+Se utilizar Traefik, basta descomentar ou adicionar as labels no serviço `dashboard` do `compose.yaml`:
 ```yaml
     labels:
       - "traefik.enable=true"
@@ -200,5 +200,5 @@ Se utilizar Traefik, basta descomentar ou adicionar as labels no serviço `dashb
 Se desejar rodar a stack na sua máquina de desenvolvimento com as portas 7860 e 5432 abertas no host físico (sem exigir proxy ou rede `web_network`), use:
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d
+docker compose -f compose.dev.yaml up -d
 ```

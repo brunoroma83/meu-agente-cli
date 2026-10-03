@@ -96,4 +96,4 @@ docker compose down
   - `meu-agente-cli_agent_data`: Mapeia para as configurações em `/root/.config/meu-agente-cli` dentro do container.
   - `meu-agente-cli_pgdata`: Armazena os dados físicos do PostgreSQL.
 - **Configuração de Comandos Seguros**: O arquivo `safe_commands.json` é compartilhado diretamente da máquina host para a pasta `/app/safe_commands.json` do container. Qualquer edição feita no host se aplica instantaneamente ao agente em execução no Docker.
-- **Configuração de Ambiente**: As variáveis como `DB_HOST=db`, `DB_NAME=meu_agente_db` e `LM_STUDIO_URL=http://host.docker.internal:1234` são injetadas automaticamente no container através do arquivo `docker-compose.yml`.
+- **Configuração de Ambiente**: As variáveis como `DB_HOST=db`, `DB_NAME=meu_agente_db` e `LM_STUDIO_URL=http://host.docker.internal:1234` são injetadas automaticamente no container através do arquivo `compose.yaml`.

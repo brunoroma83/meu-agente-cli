@@ -30,7 +30,7 @@ try {
 
 if (-not $Ready) {
     Write-Host "⚠️ Container 'db' não está respondendo. Tentando iniciar..." -ForegroundColor Yellow
-    docker compose -f "$ProjectDir\docker-compose.dev.yml" up -d db
+    docker compose -f "$ProjectDir\compose.dev.yaml" up -d db
     Start-Sleep -Seconds 3
 }
 
