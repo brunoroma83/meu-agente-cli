@@ -462,48 +462,277 @@ async def delete_card_action(card_id: int):
 
 
 # =====================================================================
-# RECEITAS & GASTOS DIÁRIOS
+# RECEITAS
 # =====================================================================
 
-@app.get("/lancamentos", response_class=HTMLResponse)
-async def lancamentos_view(request: Request, q: Optional[str] = None, mes_ano: Optional[str] = None, user_name: Optional[str] = None):
+@app.get("/receitas", response_class=HTMLResponse)
+async def receitas_view(
+    request: Request,
+    mes_ano: Optional[str] = None,
+    user_name: Optional[str] = None,
+    q: Optional[str] = None
+):
     user = request.state.user
     m, y, mes_ano_db = parse_month_year(mes_ano)
     mes_ano_input = f"{y:04d}-{m:02d}"
     u_filter = user_name.strip().lower() if user_name and user_name.strip() else None
-    
-    records = db.search_financial_records(
-        limit=100,
+
+    records = db.get_incomes(
         month_year=mes_ano_db,
-        query=q,
-        user_name=u_filter
+        user_name=u_filter,
+        query=q
     )
-    
-    # Transforma registros em formato amigável para template
-    items = []
-    for r in records:
-        items.append({
-            "id": r[0],
-            "type": r[1],
-            "category": r[2],
-            "amount": float(r[3]),
-            "description": r[4],
-            "date": r[5],
-            "due_date": r[6],
-            "user_name": r[7] if len(r) > 7 else "bruno"
-        })
-        
-    return templates.TemplateResponse(request=request, name="lancamentos.html", context={
+
+    total_receitas = sum(r["amount"] for r in records)
+    total_recebido = sum(r["amount"] for r in records if r.get("is_paid"))
+    total_a_receber = sum(r["amount"] for r in records if not r.get("is_paid"))
+    categorias_receitas = db.get_distinct_categories("receita")
+
+    return templates.TemplateResponse(request=request, name="receitas.html", context={
         "user": user,
-        "current_page": "lancamentos",
+        "current_page": "receitas",
         "active_user_filter": u_filter or "",
         "mes_ano_input": mes_ano_input,
         "search_query": q or "",
-        "records": items
+        "records": records,
+        "total_receitas": total_receitas,
+        "total_recebido": total_recebido,
+        "total_a_receber": total_a_receber,
+        "categorias_receitas": categorias_receitas
     })
 
+@app.post("/receitas/add")
+async def add_receita_action(
+    request: Request,
+    descricao: str = Form(...),
+    categoria: str = Form("Salário"),
+    categoria_custom: Optional[str] = Form(None),
+    valor: float = Form(...),
+    data: Optional[str] = Form(None),
+    due_date: Optional[str] = Form(None),
+    user_name: str = Form("bruno"),
+    nature: str = Form("monthly_fixed"),
+    is_paid: Optional[str] = Form(None),
+    payment_date: Optional[str] = Form(None),
+    mes_ano: Optional[str] = Form(None)
+):
+    cat_final = categoria_custom.strip() if categoria_custom and categoria_custom.strip() else categoria.strip()
+    paid_bool = is_paid in ("true", "True", "1", "on", "yes")
+    db.add_financial_record(
+        record_type="receita",
+        category=cat_final,
+        amount=float(valor),
+        description=descricao,
+        date=data,
+        due_date=due_date,
+        user_name=user_name.strip().lower(),
+        nature=nature,
+        is_paid=paid_bool,
+        payment_date=payment_date if paid_bool else None
+    )
+    ref_date = due_date or data
+    if ref_date and len(ref_date) >= 7:
+        redir_mes = ref_date[:7]
+    else:
+        m, y, _ = parse_month_year(mes_ano)
+        redir_mes = f"{y:04d}-{m:02d}"
+    return RedirectResponse(
+        url=f"/receitas?mes_ano={redir_mes}&user_name={user_name.strip().lower()}",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
+@app.post("/receitas/edit/{record_id}")
+async def edit_receita_action(
+    request: Request,
+    record_id: int,
+    descricao: str = Form(...),
+    categoria: str = Form(...),
+    valor: float = Form(...),
+    data: Optional[str] = Form(None),
+    due_date: Optional[str] = Form(None),
+    user_name: str = Form("bruno"),
+    nature: str = Form("monthly_fixed"),
+    is_paid: Optional[str] = Form(None),
+    payment_date: Optional[str] = Form(None),
+    mes_ano: Optional[str] = Form(None)
+):
+    paid_bool = is_paid in ("true", "True", "1", "on", "yes")
+    db.update_financial_record(
+        record_id=record_id,
+        record_type="receita",
+        description=descricao,
+        category=categoria,
+        amount=float(valor),
+        date=data,
+        due_date=due_date,
+        user_name=user_name.strip().lower(),
+        nature=nature,
+        is_paid=paid_bool,
+        payment_date=payment_date if paid_bool else None
+    )
+    m, y, _ = parse_month_year(mes_ano)
+    return RedirectResponse(
+        url=f"/receitas?mes_ano={y:04d}-{m:02d}&user_name={user_name.strip().lower()}",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
+@app.post("/receitas/delete/{record_id}")
+async def delete_receita_action(
+    record_id: int,
+    mes_ano: Optional[str] = None,
+    user_name: Optional[str] = None
+):
+    db.delete_financial_record(record_id)
+    m, y, _ = parse_month_year(mes_ano)
+    return RedirectResponse(
+        url=f"/receitas?mes_ano={y:04d}-{m:02d}&user_name={user_name or ''}",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
+# =====================================================================
+# GASTOS (EXCLUINDO CARTÕES DE CRÉDITO)
+# =====================================================================
+
+@app.get("/gastos", response_class=HTMLResponse)
+async def gastos_view(
+    request: Request,
+    mes_ano: Optional[str] = None,
+    user_name: Optional[str] = None,
+    descricao: Optional[str] = None,
+    categoria: Optional[str] = None
+):
+    user = request.state.user
+    m, y, mes_ano_db = parse_month_year(mes_ano)
+    mes_ano_input = f"{y:04d}-{m:02d}"
+    u_filter = user_name.strip().lower() if user_name and user_name.strip() else None
+    cat_filter = categoria.strip() if categoria and categoria.strip() and categoria.strip() not in ("Todas", "Todos") else None
+
+    records = db.get_expenses_list(
+        month_year=mes_ano_db,
+        category=cat_filter,
+        query=descricao,
+        user_name=u_filter
+    )
+
+    total_gastos = sum(r["amount"] for r in records)
+    total_pago = sum(r["amount"] for r in records if r.get("is_paid"))
+    total_a_pagar = sum(r["amount"] for r in records if not r.get("is_paid"))
+    categorias_gastos = db.get_distinct_categories("despesa")
+
+    return templates.TemplateResponse(request=request, name="gastos.html", context={
+        "user": user,
+        "current_page": "gastos",
+        "active_user_filter": u_filter or "",
+        "mes_ano_input": mes_ano_input,
+        "filtro_descricao": descricao or "",
+        "filtro_categoria": cat_filter or "",
+        "records": records,
+        "total_gastos": total_gastos,
+        "total_pago": total_pago,
+        "total_a_pagar": total_a_pagar,
+        "categorias_gastos": categorias_gastos
+    })
+
+@app.post("/gastos/add")
+async def add_gasto_action(
+    request: Request,
+    descricao: str = Form(...),
+    categoria: str = Form("Alimentação"),
+    categoria_custom: Optional[str] = Form(None),
+    valor: float = Form(...),
+    data: Optional[str] = Form(None),
+    due_date: Optional[str] = Form(None),
+    user_name: str = Form("bruno"),
+    nature: str = Form("daily"),
+    is_paid: Optional[str] = Form("on"),
+    mes_ano: Optional[str] = Form(None)
+):
+    cat_final = categoria_custom.strip() if categoria_custom and categoria_custom.strip() else categoria.strip()
+    paid_bool = is_paid in ("true", "True", "1", "on", "yes")
+    db.add_financial_record(
+        record_type="despesa",
+        category=cat_final,
+        amount=float(valor),
+        description=descricao,
+        date=data,
+        due_date=due_date or data,
+        user_name=user_name.strip().lower(),
+        nature=nature,
+        is_paid=paid_bool
+    )
+    ref_date = data or due_date
+    if ref_date and len(ref_date) >= 7:
+        redir_mes = ref_date[:7]
+    else:
+        m, y, _ = parse_month_year(mes_ano)
+        redir_mes = f"{y:04d}-{m:02d}"
+    return RedirectResponse(
+        url=f"/gastos?mes_ano={redir_mes}&user_name={user_name.strip().lower()}",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
+@app.post("/gastos/edit/{record_id}")
+async def edit_gasto_action(
+    request: Request,
+    record_id: int,
+    descricao: str = Form(...),
+    categoria: str = Form(...),
+    valor: float = Form(...),
+    data: Optional[str] = Form(None),
+    due_date: Optional[str] = Form(None),
+    user_name: str = Form("bruno"),
+    nature: str = Form("daily"),
+    is_paid: Optional[str] = Form(None),
+    mes_ano: Optional[str] = Form(None)
+):
+    paid_bool = is_paid in ("true", "True", "1", "on", "yes")
+    db.update_financial_record(
+        record_id=record_id,
+        record_type="despesa",
+        description=descricao,
+        category=categoria,
+        amount=float(valor),
+        date=data,
+        due_date=due_date or data,
+        user_name=user_name.strip().lower(),
+        nature=nature,
+        is_paid=paid_bool
+    )
+    m, y, _ = parse_month_year(mes_ano)
+    return RedirectResponse(
+        url=f"/gastos?mes_ano={y:04d}-{m:02d}&user_name={user_name.strip().lower()}",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
+@app.post("/gastos/delete/{record_id}")
+async def delete_gasto_action(
+    record_id: int,
+    mes_ano: Optional[str] = None,
+    user_name: Optional[str] = None
+):
+    db.delete_financial_record(record_id)
+    m, y, _ = parse_month_year(mes_ano)
+    return RedirectResponse(
+        url=f"/gastos?mes_ano={y:04d}-{m:02d}&user_name={user_name or ''}",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
+# =====================================================================
+# ROTAS LEGADAS (/lancamentos) PARA RETROCOMPATIBILIDADE
+# =====================================================================
+
+@app.get("/lancamentos")
+async def lancamentos_redirect(mes_ano: Optional[str] = None, user_name: Optional[str] = None):
+    query_params = []
+    if mes_ano:
+        query_params.append(f"mes_ano={mes_ano}")
+    if user_name:
+        query_params.append(f"user_name={user_name}")
+    qs = f"?{'&'.join(query_params)}" if query_params else ""
+    return RedirectResponse(url=f"/gastos{qs}", status_code=status.HTTP_303_SEE_OTHER)
+
 @app.post("/lancamentos/add")
-async def add_lancamento_action(
+async def legacy_add_lancamento_action(
     request: Request,
     tipo: str = Form("despesa"),
     categoria: str = Form("Outros"),
@@ -520,9 +749,11 @@ async def add_lancamento_action(
         description=descricao,
         user_name=user_name.strip().lower()
     )
-    return RedirectResponse(url=f"/lancamentos?mes_ano={y:04d}-{m:02d}", status_code=status.HTTP_303_SEE_OTHER)
+    target = "/receitas" if tipo.lower() == "receita" else "/gastos"
+    return RedirectResponse(url=f"{target}?mes_ano={y:04d}-{m:02d}", status_code=status.HTTP_303_SEE_OTHER)
+
 @app.post("/lancamentos/edit/{record_id}")
-async def edit_lancamento_action(
+async def legacy_edit_lancamento_action(
     request: Request,
     record_id: int,
     tipo: str = Form(...),
@@ -544,17 +775,18 @@ async def edit_lancamento_action(
         date=data,
         user_name=user_name.strip().lower()
     )
+    target = "/receitas" if tipo.lower() == "receita" else "/gastos"
     return RedirectResponse(
-        url=f"/lancamentos?mes_ano={y:04d}-{m:02d}&user_name={user_name.strip().lower()}",
+        url=f"{target}?mes_ano={y:04d}-{m:02d}&user_name={user_name.strip().lower()}",
         status_code=status.HTTP_303_SEE_OTHER
     )
 
 @app.post("/lancamentos/delete/{record_id}")
-async def delete_lancamento_action(record_id: int, mes_ano: Optional[str] = None, user_name: Optional[str] = None):
+async def legacy_delete_lancamento_action(record_id: int, mes_ano: Optional[str] = None, user_name: Optional[str] = None):
     db.delete_financial_record(record_id)
     m, y, _ = parse_month_year(mes_ano)
     return RedirectResponse(
-        url=f"/lancamentos?mes_ano={y:04d}-{m:02d}&user_name={user_name or ''}",
+        url=f"/gastos?mes_ano={y:04d}-{m:02d}&user_name={user_name or ''}",
         status_code=status.HTTP_303_SEE_OTHER
     )
 

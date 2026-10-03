@@ -1,0 +1,494 @@
+{% extends "base.html" %}
+
+{% block title %}Receitas & Entradas{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+    <!-- Header & Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="md:col-span-1 bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-center">
+            <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Total de Receitas</div>
+            <div class="text-2xl font-bold text-emerald-400 font-mono">
+                R$ {{ "%.2f"|format(total_receitas) }}
+            </div>
+            <div class="text-[11px] text-slate-500 mt-1">{{ records|length }} registro(s) no período</div>
+        </div>
+
+        <div class="md:col-span-1 bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-center">
+            <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Total Recebido</div>
+            <div class="text-2xl font-bold text-white font-mono">
+                R$ {{ "%.2f"|format(total_recebido) }}
+            </div>
+            <div class="text-[11px] text-emerald-400 mt-1 flex items-center">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block mr-1.5"></span>
+                Liquidado / Em conta
+            </div>
+        </div>
+
+        <div class="md:col-span-1 bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-center">
+            <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">A Receber / Previsto</div>
+            <div class="text-2xl font-bold text-amber-400 font-mono">
+                R$ {{ "%.2f"|format(total_a_receber) }}
+            </div>
+            <div class="text-[11px] text-amber-400 mt-1 flex items-center">
+                <span class="w-2 h-2 rounded-full bg-amber-400 inline-block mr-1.5"></span>
+                Aguardando liquidação
+            </div>
+        </div>
+
+        <div class="md:col-span-1 bg-slate-900/60 border border-slate-800/80 rounded-xl p-4 flex flex-col justify-center items-start">
+            <div class="text-xs text-slate-400 mb-2">Visão Atual</div>
+            <span class="px-2.5 py-1 rounded-md text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                {% if active_user_filter == 'bruno' %}🧑 Bruno
+                {% elif active_user_filter == 'fabiana' %}👩 Fabiana
+                {% else %}👥 Familiar (Todos)
+                {% endif %}
+            </span>
+            <div class="text-[10px] text-slate-500 mt-2">Mês: {{ mes_ano_input }}</div>
+        </div>
+    </div>
+
+    <!-- Bloco 1: Adicionar Nova Receita (Todos os Campos Possíveis) -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
+        <h2 class="text-sm font-bold text-white mb-3 flex items-center space-x-2">
+            <span class="p-1 bg-emerald-500/10 text-emerald-400 rounded border border-emerald-500/20">🟢</span>
+            <span>Adicionar Nova Receita</span>
+        </h2>
+        
+        <form method="POST" action="/receitas/add" class="space-y-4 text-xs">
+            <input type="hidden" name="mes_ano" value="{{ mes_ano_input }}">
+
+            <!-- Linha 1: Descrição, Categoria, Valor -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                <div class="md:col-span-2">
+                    <label class="block text-slate-400 mb-1 font-medium">Descrição da Receita *</label>
+                    <input type="text" name="descricao" required placeholder="Ex: Salário Empresa X, Dividendos FII, Consultoria..."
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:ring-2 focus:ring-emerald-500">
+                </div>
+
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Categoria *</label>
+                    <input type="text" name="categoria" list="lista-categorias-receitas" required placeholder="Salário, Dividendos..."
+                           value="Salário"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500">
+                    <datalist id="lista-categorias-receitas">
+                        {% for cat in categorias_receitas %}
+                        <option value="{{ cat }}">
+                        {% endfor %}
+                        <option value="Salário">
+                        <option value="Pró-labore">
+                        <option value="Dividendos">
+                        <option value="Rendimentos">
+                        <option value="Aulas">
+                        <option value="Contratos">
+                        <option value="Freelance Dev">
+                        <option value="Prestação de Serviço">
+                        <option value="Reembolso">
+                        <option value="Vendas">
+                        <option value="Outros">
+                    </datalist>
+                </div>
+
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Valor (R$) *</label>
+                    <input type="number" step="0.01" min="0.01" name="valor" required placeholder="0.00"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-2 focus:ring-emerald-500">
+                </div>
+            </div>
+
+            <!-- Linha 2: Datas, Titular, Natureza, Status e Data Recebimento -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Data Competência</label>
+                    <input type="date" name="data" id="add-receita-data"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500">
+                </div>
+
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Data Prevista (Venc.)</label>
+                    <input type="date" name="due_date" id="add-receita-due-date"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500">
+                </div>
+
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Responsável / Titular</label>
+                    <select name="user_name" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500">
+                        <option value="bruno" {% if active_user_filter == 'bruno' or user.user_name == 'bruno' %}selected{% endif %}>🧑 Bruno</option>
+                        <option value="fabiana" {% if active_user_filter == 'fabiana' or user.user_name == 'fabiana' %}selected{% endif %}>👩 Fabiana</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Natureza</label>
+                    <select name="nature" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500">
+                        <option value="monthly_fixed">Fixa / Recorrente</option>
+                        <option value="daily">Variável / Esporádica</option>
+                        <option value="investment">Rendimento de Investimento</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Status de Liquidação</label>
+                    <div class="flex items-center space-x-2 pt-1.5">
+                        <label class="inline-flex items-center cursor-pointer">
+                            <input type="checkbox" name="is_paid" value="1" checked id="add-receita-is-paid"
+                                   onchange="toggleAddPaymentDate(this)"
+                                   class="sr-only peer">
+                            <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                            <span id="add-receita-status-text" class="ml-2 text-xs font-semibold text-emerald-400">Recebido</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Linha 3: Data Efetiva de Recebimento & Botão -->
+            <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 pt-1 border-t border-slate-800/60">
+                <div id="add-receita-payment-container" class="w-full sm:w-64">
+                    <label class="block text-slate-400 mb-1 font-medium">Data do Recebimento Efetivo</label>
+                    <input type="date" name="payment_date" id="add-receita-payment-date"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500">
+                </div>
+
+                <div class="flex justify-end">
+                    <button type="submit" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition shadow-md flex items-center space-x-2">
+                        <span>➕ Cadastrar Receita</span>
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- Bloco 2: Filtrar Receitas (Data, Usuário, Busca) -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+            <h3 class="text-sm font-bold text-white flex items-center space-x-1.5">
+                <span>🔍</span>
+                <span>Filtrar Receitas</span>
+            </h3>
+            <p class="text-xs text-slate-400">Filtre por período mensal, titular responsável ou busque por termo.</p>
+        </div>
+
+        <form method="GET" action="/receitas" class="flex flex-wrap items-center gap-2">
+            <div>
+                <input type="month" name="mes_ano" value="{{ mes_ano_input }}" onchange="this.form.submit()"
+                       title="Selecione o Mês"
+                       class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:ring-2 focus:ring-emerald-500">
+            </div>
+
+            <div>
+                <select name="user_name" onchange="this.form.submit()"
+                        class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:ring-2 focus:ring-emerald-500">
+                    <option value="" {% if not active_user_filter %}selected{% endif %}>👥 Todos os Titulares</option>
+                    <option value="bruno" {% if active_user_filter == 'bruno' %}selected{% endif %}>🧑 Bruno</option>
+                    <option value="fabiana" {% if active_user_filter == 'fabiana' %}selected{% endif %}>👩 Fabiana</option>
+                </select>
+            </div>
+
+            <div>
+                <input type="text" name="q" value="{{ search_query }}" placeholder="Buscar por termo..."
+                       class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:ring-2 focus:ring-emerald-500">
+            </div>
+
+            <button type="submit" class="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 font-medium transition">
+                Filtrar
+            </button>
+
+            {% if search_query or active_user_filter %}
+            <a href="/receitas?mes_ano={{ mes_ano_input }}" class="px-2.5 py-1.5 text-xs text-slate-400 hover:text-rose-400 transition" title="Limpar filtros">
+                ✕ Limpar
+            </a>
+            {% endif %}
+        </form>
+    </div>
+
+    <!-- Bloco 3: Lista de Receitas com Botões de Apagar e Editar -->
+    <div id="receitas-table-container" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/80">
+            <h3 class="text-sm font-bold text-white">Lista de Receitas Registradas</h3>
+            <span class="text-xs text-slate-400 font-mono">{{ records|length }} registro(s)</span>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs text-slate-300">
+                <thead class="bg-slate-950 text-slate-400 uppercase tracking-wider text-[11px] border-b border-slate-800">
+                    <tr>
+                        <th class="py-3 px-4">Status</th>
+                        <th class="py-3 px-4">Data / Previsão</th>
+                        <th class="py-3 px-4">Categoria</th>
+                        <th class="py-3 px-4">Descrição</th>
+                        <th class="py-3 px-4">Titular</th>
+                        <th class="py-3 px-4">Natureza</th>
+                        <th class="py-3 px-4 text-right">Valor</th>
+                        <th class="py-3 px-4 text-center">Ações</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 font-mono">
+                    {% for r in records %}
+                    <tr class="hover:bg-slate-800/40 transition" id="receita-row-{{ r.id }}">
+                        <!-- Status -->
+                        <td class="py-3 px-4 font-sans">
+                            {% if r.is_paid %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="Recebido em {{ r.payment_date.strftime('%d/%m/%Y') if r.payment_date and r.payment_date.strftime else (r.payment_date or 'conta') }}">
+                                ✓ Recebido
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                ⏳ A Receber
+                            </span>
+                            {% endif %}
+                        </td>
+
+                        <!-- Data / Vencimento -->
+                        <td class="py-3 px-4 text-slate-300">
+                            {% if r.due_date %}
+                                {{ r.due_date.strftime('%d/%m/%Y') if r.due_date.strftime else r.due_date }}
+                            {% elif r.date %}
+                                {{ r.date.strftime('%d/%m/%Y') if r.date.strftime else r.date }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+
+                        <!-- Categoria -->
+                        <td class="py-3 px-4 font-sans">
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-800 text-slate-200 border border-slate-700/60">
+                                {{ r.category }}
+                            </span>
+                        </td>
+
+                        <!-- Descrição -->
+                        <td class="py-3 px-4 font-sans text-slate-200">
+                            {{ r.description }}
+                        </td>
+
+                        <!-- Titular -->
+                        <td class="py-3 px-4">
+                            <span class="px-2 py-0.5 rounded text-[10px] font-medium {% if r.user_name == 'bruno' %}bg-blue-500/10 text-blue-400 border border-blue-500/20{% else %}bg-purple-500/10 text-purple-400 border border-purple-500/20{% endif %}">
+                                {{ r.user_name.capitalize() if r.user_name else 'Bruno' }}
+                            </span>
+                        </td>
+
+                        <!-- Natureza -->
+                        <td class="py-3 px-4 font-sans">
+                            {% if r.nature == 'monthly_fixed' %}
+                            <span class="text-[10px] text-slate-400">Recorrente/Fixa</span>
+                            {% elif r.nature == 'investment' %}
+                            <span class="text-[10px] text-indigo-400 font-semibold">Investimento</span>
+                            {% else %}
+                            <span class="text-[10px] text-slate-400">Variável</span>
+                            {% endif %}
+                        </td>
+
+                        <!-- Valor -->
+                        <td class="py-3 px-4 text-right font-bold text-emerald-400">
+                            R$ {{ "%.2f"|format(r.amount) }}
+                        </td>
+
+                        <!-- Ações: Editar e Apagar -->
+                        <td class="py-3 px-4 text-center space-x-1.5">
+                            <button type="button"
+                                    onclick="openEditReceitaModal(this)"
+                                    data-id="{{ r.id }}"
+                                    data-descricao="{{ r.description }}"
+                                    data-categoria="{{ r.category }}"
+                                    data-valor="{{ '%.2f'|format(r.amount) }}"
+                                    data-data="{{ r.date.strftime('%Y-%m-%d') if r.date and r.date.strftime else (r.date or '') }}"
+                                    data-duedate="{{ r.due_date.strftime('%Y-%m-%d') if r.due_date and r.due_date.strftime else (r.due_date or '') }}"
+                                    data-username="{{ r.user_name or 'bruno' }}"
+                                    data-nature="{{ r.nature or 'monthly_fixed' }}"
+                                    data-ispaid="{{ '1' if r.is_paid else '0' }}"
+                                    data-paymentdate="{{ r.payment_date.strftime('%Y-%m-%d') if r.payment_date and r.payment_date.strftime else (r.payment_date or '') }}"
+                                    title="Editar receita"
+                                    class="text-indigo-400 hover:text-indigo-300 hover:bg-indigo-950/40 p-1.5 rounded transition text-xs">
+                                ✏️
+                            </button>
+                            
+                            <form method="POST" action="/receitas/delete/{{ r.id }}" class="inline"
+                                  onsubmit="return confirm('Deseja realmente apagar a receita \'{{ r.description }}\' no valor de R$ {{ '%.2f'|format(r.amount) }}?');">
+                                <input type="hidden" name="mes_ano" value="{{ mes_ano_input }}">
+                                <input type="hidden" name="user_name" value="{{ active_user_filter or '' }}">
+                                <button type="submit" title="Excluir receita"
+                                        class="text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 p-1.5 rounded transition text-xs">
+                                    🗑️
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="py-12 text-center text-slate-500 font-sans">
+                            <div class="text-3xl mb-2">🟢</div>
+                            <p class="font-medium">Nenhuma receita encontrada para os filtros selecionados.</p>
+                            <p class="text-xs text-slate-600 mt-1">Utilize o formulário acima para registrar uma nova entrada.</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Editar Receita (Todos os Campos) -->
+<div id="modal-edit-receita" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative">
+        <div class="flex justify-between items-center mb-4 pb-3 border-b border-slate-800">
+            <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                <span>✏️</span>
+                <span>Editar Receita #<span id="edit-rec-id-display"></span></span>
+            </h3>
+            <button onclick="closeEditReceitaModal()" class="text-slate-400 hover:text-white text-xl">&times;</button>
+        </div>
+
+        <form id="edit-rec-form" method="POST" action="" class="space-y-3.5 text-xs">
+            <input type="hidden" name="mes_ano" value="{{ mes_ano_input }}">
+
+            <!-- Descrição & Categoria -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Descrição *</label>
+                    <input type="text" id="edit-rec-descricao" name="descricao" required
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Categoria *</label>
+                    <input type="text" id="edit-rec-categoria" name="categoria" list="lista-categorias-receitas" required
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500">
+                </div>
+            </div>
+
+            <!-- Valor, Titular e Natureza -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Valor (R$) *</label>
+                    <input type="number" step="0.01" min="0.01" id="edit-rec-valor" name="valor" required
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:ring-2 focus:ring-emerald-500">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Titular</label>
+                    <select id="edit-rec-user" name="user_name" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                        <option value="bruno">Bruno</option>
+                        <option value="fabiana">Fabiana</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Natureza</label>
+                    <select id="edit-rec-nature" name="nature" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                        <option value="monthly_fixed">Fixa / Recorrente</option>
+                        <option value="daily">Variável / Esporádica</option>
+                        <option value="investment">Investimento</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Datas: Competência e Previsão -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Data Competência</label>
+                    <input type="date" id="edit-rec-data" name="data"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Data Prevista (Vencimento)</label>
+                    <input type="date" id="edit-rec-duedate" name="due_date"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                </div>
+            </div>
+
+            <!-- Status e Data Efetiva -->
+            <div class="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-2">
+                <div class="flex items-center justify-between">
+                    <span class="text-slate-300 font-medium">Status de Liquidação</span>
+                    <label class="inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="edit-rec-ispaid" name="is_paid" value="1"
+                               onchange="toggleEditPaymentDate(this)"
+                               class="sr-only peer">
+                        <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                        <span id="edit-rec-status-text" class="ml-2 text-xs font-semibold text-slate-400">Pendente</span>
+                    </label>
+                </div>
+                <div id="edit-rec-payment-container">
+                    <label class="block text-slate-400 mb-1 font-medium">Data do Recebimento Efetivo</label>
+                    <input type="date" id="edit-rec-paymentdate" name="payment_date"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                </div>
+            </div>
+
+            <!-- Botões Modal -->
+            <div class="flex justify-end space-x-2 pt-3 border-t border-slate-800">
+                <button type="button" onclick="closeEditReceitaModal()"
+                        class="px-4 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 transition">Cancelar</button>
+                <button type="submit"
+                        class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition shadow">Salvar Alterações</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// Inicializa datas com a data atual se vazias
+document.addEventListener("DOMContentLoaded", function() {
+    const today = new Date().toISOString().split('T')[0];
+    const dtInput = document.getElementById('add-receita-data');
+    const dueInput = document.getElementById('add-receita-due-date');
+    const payInput = document.getElementById('add-receita-payment-date');
+    if (dtInput && !dtInput.value) dtInput.value = today;
+    if (dueInput && !dueInput.value) dueInput.value = today;
+    if (payInput && !payInput.value) payInput.value = today;
+});
+
+function toggleAddPaymentDate(cb) {
+    const text = document.getElementById('add-receita-status-text');
+    const container = document.getElementById('add-receita-payment-container');
+    if (cb.checked) {
+        text.textContent = 'Recebido';
+        text.className = 'ml-2 text-xs font-semibold text-emerald-400';
+        container.classList.remove('opacity-40');
+    } else {
+        text.textContent = 'A Receber';
+        text.className = 'ml-2 text-xs font-semibold text-amber-400';
+        container.classList.add('opacity-40');
+    }
+}
+
+function toggleEditPaymentDate(cb) {
+    const text = document.getElementById('edit-rec-status-text');
+    const container = document.getElementById('edit-rec-payment-container');
+    if (cb.checked) {
+        text.textContent = 'Recebido';
+        text.className = 'ml-2 text-xs font-semibold text-emerald-400';
+        container.classList.remove('opacity-40');
+    } else {
+        text.textContent = 'A Receber';
+        text.className = 'ml-2 text-xs font-semibold text-amber-400';
+        container.classList.add('opacity-40');
+    }
+}
+
+function openEditReceitaModal(btn) {
+    const id = btn.dataset.id;
+    document.getElementById('edit-rec-id-display').textContent = id;
+    document.getElementById('edit-rec-form').action = '/receitas/edit/' + id;
+    document.getElementById('edit-rec-descricao').value = btn.dataset.descricao || '';
+    document.getElementById('edit-rec-categoria').value = btn.dataset.categoria || '';
+    document.getElementById('edit-rec-valor').value = btn.dataset.valor || '';
+    document.getElementById('edit-rec-data').value = btn.dataset.data || '';
+    document.getElementById('edit-rec-duedate').value = btn.dataset.duedate || '';
+    document.getElementById('edit-rec-user').value = btn.dataset.username || 'bruno';
+    document.getElementById('edit-rec-nature').value = btn.dataset.nature || 'monthly_fixed';
+
+    const isPaid = btn.dataset.ispaid === '1';
+    const isPaidCheckbox = document.getElementById('edit-rec-ispaid');
+    isPaidCheckbox.checked = isPaid;
+    document.getElementById('edit-rec-paymentdate').value = btn.dataset.paymentdate || '';
+    toggleEditPaymentDate(isPaidCheckbox);
+
+    document.getElementById('modal-edit-receita').classList.remove('hidden');
+}
+
+function closeEditReceitaModal() {
+    document.getElementById('modal-edit-receita').classList.add('hidden');
+}
+</script>
+{% endblock %}

@@ -833,20 +833,39 @@ def delete_user_note(note_id: int) -> bool:
         print(f"[ERROR] Erro ao desativar nota: {e}", file=sys.stderr)
         return False
 
-# 4. Registros Financeiros (Financial Records)
-def add_financial_record(record_type: str, category: str, amount: float, description: str, due_date: Optional[str] = None, user_name: str = "bruno") -> bool:
-    """Registra uma receita ou despesa com data de vencimento opcional e vínculo com usuário."""
+def add_financial_record(
+    record_type: str, 
+    category: str, 
+    amount: float, 
+    description: str, 
+    due_date: Optional[str] = None, 
+    user_name: str = "bruno",
+    date: Optional[str] = None,
+    nature: Optional[str] = None,
+    is_paid: Optional[bool] = False,
+    payment_date: Optional[str] = None
+) -> bool:
+    """Registra uma receita ou despesa com campos completos e vínculo com usuário."""
     try:
         cat_clean = clean_string(category)
         desc_clean = clean_string(description)
         u_name = clean_string(user_name).strip().lower() if user_name else "bruno"
-        if not due_date:
-            due_date = datetime.now().strftime("%Y-%m-%d")
+        dt_due = parse_date_str(due_date) if due_date else None
+        dt_date = parse_date_str(date) if date else datetime.now().date()
+        if not dt_due:
+            dt_due = dt_date
+        clean_nature = clean_string(nature) if nature else ("monthly_fixed" if record_type == "receita" else "daily")
+        paid_val = bool(is_paid)
+        dt_paid = parse_date_str(payment_date) if (paid_val and payment_date) else (dt_date if paid_val else None)
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO financial_records (type, category, amount, description, due_date, user_name) VALUES (%s, %s, %s, %s, %s, %s)",
-                (record_type, cat_clean, amount, desc_clean, due_date, u_name)
+                """
+                INSERT INTO financial_records 
+                    (type, category, amount, description, due_date, date, user_name, nature, is_paid, payment_date) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (record_type, cat_clean, amount, desc_clean, dt_due, dt_date, u_name, clean_nature, paid_val, dt_paid)
             )
         conn.commit()
         conn.close()
@@ -1093,7 +1112,8 @@ def update_financial_record(
     record_type: Optional[str] = None,
     user_name: Optional[str] = None,
     is_paid: Optional[bool] = None,
-    payment_date: Optional[str] = None
+    payment_date: Optional[str] = None,
+    nature: Optional[str] = None
 ) -> bool:
     """Atualiza os dados de um registro financeiro ativo existente."""
     try:
@@ -1126,6 +1146,11 @@ def update_financial_record(
             if u_clean:
                 fields.append("user_name = %s")
                 params.append(u_clean)
+        if nature is not None:
+            nat_clean = clean_string(nature)
+            if nat_clean:
+                fields.append("nature = %s")
+                params.append(nat_clean)
         if is_paid is not None:
             fields.append("is_paid = %s")
             params.append(bool(is_paid))
@@ -2110,7 +2135,7 @@ def get_card_purchases(card_name: Optional[str] = None, month_year: Optional[str
     return items
 
 def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Retorna as receitas ativas para o mês especificado com filtro opcional por usuário."""
+    """Retorna as receitas ativas para o mês especificado com todos os campos disponíveis e filtro opcional por usuário."""
     now = datetime.now()
     if month_year and "-" in month_year:
         parts = month_year.split("-")
@@ -2123,7 +2148,7 @@ def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str
         conn = get_connection()
         with conn.cursor() as cur:
             sql = """
-                SELECT id, category, amount, description, COALESCE(due_date, date), date, user_name
+                SELECT id, category, amount, description, COALESCE(due_date, date), date, user_name, nature, is_paid, payment_date
                 FROM financial_records
                 WHERE active = TRUE AND lower(type) = 'receita'
                   AND EXTRACT(MONTH FROM COALESCE(due_date, date)) = %s
@@ -2141,7 +2166,7 @@ def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str
                 termo = f"%{query.strip()}%"
                 params.extend([termo, termo])
                 
-            sql += " ORDER BY COALESCE(due_date, date) ASC, id ASC"
+            sql += " ORDER BY COALESCE(due_date, date) DESC, id DESC"
             cur.execute(sql, tuple(params))
             for r in cur.fetchall():
                 incomes.append({
@@ -2151,12 +2176,107 @@ def get_monthly_incomes(month_year: Optional[str] = None, category: Optional[str
                     "description": r[3] or "",
                     "due_date": r[4],
                     "date": r[5],
-                    "user_name": r[6] or "bruno"
+                    "user_name": r[6] or "bruno",
+                    "nature": r[7] or "monthly_fixed",
+                    "is_paid": bool(r[8]),
+                    "payment_date": r[9]
                 })
         conn.close()
     except Exception as e:
         print(f"[ERROR] Erro ao buscar receitas: {e}", file=sys.stderr)
     return incomes
+
+def get_incomes(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Alias para get_monthly_incomes."""
+    return get_monthly_incomes(month_year=month_year, category=category, query=query, user_name=user_name)
+
+def get_expenses_list(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retorna despesas ativas excluindo compras de cartão de crédito (já exibidas em Cartões)."""
+    now = datetime.now()
+    if month_year and "-" in month_year:
+        parts = month_year.split("-")
+        m, y = int(parts[0]), int(parts[1])
+    else:
+        m, y = now.month, now.year
+        
+    expenses = []
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            sql = """
+                SELECT id, category, amount, description, COALESCE(date, due_date), due_date, user_name, nature, is_paid, payment_date
+                FROM financial_records
+                WHERE active = TRUE 
+                  AND lower(type) = 'despesa'
+                  AND card_id IS NULL 
+                  AND (nature IS NULL OR nature != 'card_purchase')
+                  AND EXTRACT(MONTH FROM COALESCE(date, due_date)) = %s
+                  AND EXTRACT(YEAR FROM COALESCE(date, due_date)) = %s
+            """
+            params = [m, y]
+            if category and category not in ["Todas", "Todos", "", None]:
+                sql += " AND lower(category) = %s"
+                params.append(category.strip().lower())
+            if user_name and user_name.strip().lower() not in ("todos", "todos/compartilhado", "familiar", "geral", "all", ""):
+                sql += " AND LOWER(user_name) = %s"
+                params.append(user_name.strip().lower())
+            if query and query.strip():
+                sql += " AND (description ILIKE %s OR category ILIKE %s)"
+                termo = f"%{query.strip()}%"
+                params.extend([termo, termo])
+                
+            sql += " ORDER BY COALESCE(date, due_date) DESC, id DESC"
+            cur.execute(sql, tuple(params))
+            for r in cur.fetchall():
+                expenses.append({
+                    "id": r[0],
+                    "category": r[1],
+                    "amount": float(r[2]),
+                    "description": r[3] or "",
+                    "date": r[4],
+                    "due_date": r[5],
+                    "user_name": r[6] or "bruno",
+                    "nature": r[7] or "daily",
+                    "is_paid": bool(r[8]),
+                    "payment_date": r[9]
+                })
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar despesas: {e}", file=sys.stderr)
+    return expenses
+
+def get_distinct_categories(record_type: str = "despesa") -> List[str]:
+    """Retorna lista de categorias únicas para filtros/formulários, excluindo compras de cartão quando for despesa."""
+    categories = []
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            if record_type.lower() == "despesa":
+                sql = """
+                    SELECT DISTINCT category 
+                    FROM financial_records 
+                    WHERE active = TRUE 
+                      AND lower(type) = 'despesa'
+                      AND card_id IS NULL 
+                      AND (nature IS NULL OR nature != 'card_purchase')
+                      AND category IS NOT NULL AND category != ''
+                    ORDER BY category ASC
+                """
+            else:
+                sql = """
+                    SELECT DISTINCT category 
+                    FROM financial_records 
+                    WHERE active = TRUE 
+                      AND lower(type) = 'receita'
+                      AND category IS NOT NULL AND category != ''
+                    ORDER BY category ASC
+                """
+            cur.execute(sql)
+            categories = [r[0] for r in cur.fetchall() if r[0]]
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar categorias distintas: {e}", file=sys.stderr)
+    return categories
 
 def get_daily_expenses(month_year: Optional[str] = None, category: Optional[str] = None, query: Optional[str] = None, user_name: Optional[str] = None) -> List[Tuple]:
     """Retorna exclusivamente as despesas rotineiras diárias (nature = 'daily') com filtro opcional por usuário."""

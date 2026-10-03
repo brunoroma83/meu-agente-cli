@@ -3,6 +3,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import meu_agente_cli.security as sec
+import meu_agente_cli.db as db
 from meu_agente_cli.web_app import app
 from meu_agente_cli.mcp_server import mcp_server
 
@@ -420,3 +421,117 @@ def test_edit_conta_action_success():
 
     assert res.status_code == 303
     assert "/contas" in res.headers.get("location")
+
+def test_web_app_receitas_view_and_add():
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno", role="admin")
+    client.cookies.set("finance_session", token)
+
+    # 1. Acesso à página de receitas
+    res = client.get("/receitas?mes_ano=2026-10")
+    assert res.status_code == 200
+    assert "Receitas & Entradas" in res.text
+    assert "Adicionar Nova Receita" in res.text
+
+    # 2. Cadastro com todos os campos possíveis
+    res_add = client.post("/receitas/add", data={
+        "descricao": "Receita Teste Automação",
+        "categoria": "Consultoria",
+        "valor": "1500.00",
+        "data": "2026-10-05",
+        "due_date": "2026-10-05",
+        "user_name": "bruno",
+        "nature": "monthly_fixed",
+        "is_paid": "1",
+        "payment_date": "2026-10-05",
+        "mes_ano": "2026-10"
+    }, follow_redirects=False)
+    assert res_add.status_code == 303
+    assert "/receitas" in res_add.headers.get("location")
+
+def test_web_app_gastos_view_and_card_exclusion():
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno", role="admin")
+    client.cookies.set("finance_session", token)
+
+    # 1. Acesso à página de gastos
+    res = client.get("/gastos?mes_ano=2026-10")
+    assert res.status_code == 200
+    assert "Gastos & Despesas" in res.text
+    assert "Filtrar Gastos" in res.text
+
+    # 2. Cadastro de um novo gasto
+    res_add = client.post("/gastos/add", data={
+        "descricao": "Gasto Teste Automação",
+        "categoria": "Alimentação",
+        "valor": "85.00",
+        "data": "2026-10-06",
+        "due_date": "2026-10-06",
+        "user_name": "fabiana",
+        "nature": "daily",
+        "is_paid": "1",
+        "mes_ano": "2026-10"
+    }, follow_redirects=False)
+    assert res_add.status_code == 303
+    assert "/gastos" in res_add.headers.get("location")
+
+    # 3. Verifica que compras de cartão de crédito NÃO aparecem na lista de gastos
+    expenses = db.get_expenses_list(month_year="10-2026")
+    # Todas as despesas retornadas devem ter card_id nulo e nature != 'card_purchase'
+    for exp in expenses:
+        assert exp["nature"] != "card_purchase"
+
+def test_web_app_lancamentos_legacy_redirect():
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno", role="admin")
+    client.cookies.set("finance_session", token)
+
+    res = client.get("/lancamentos?mes_ano=2026-10", follow_redirects=False)
+    assert res.status_code == 303
+    assert "/gastos" in res.headers.get("location")
+
+def test_web_app_receitas_and_gastos_edit_delete():
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno", role="admin")
+    client.cookies.set("finance_session", token)
+
+    # 1. Edição de receita
+    res_edit_rec = client.post("/receitas/edit/999", data={
+        "descricao": "Receita Atualizada",
+        "categoria": "Salário",
+        "valor": "2000.00",
+        "data": "2026-10-01",
+        "due_date": "2026-10-01",
+        "user_name": "bruno",
+        "nature": "monthly_fixed",
+        "is_paid": "1",
+        "mes_ano": "2026-10"
+    }, follow_redirects=False)
+    assert res_edit_rec.status_code == 303
+    assert "/receitas" in res_edit_rec.headers.get("location")
+
+    # 2. Exclusão de receita
+    res_del_rec = client.post("/receitas/delete/999?mes_ano=2026-10", follow_redirects=False)
+    assert res_del_rec.status_code == 303
+    assert "/receitas" in res_del_rec.headers.get("location")
+
+    # 3. Edição de gasto
+    res_edit_gst = client.post("/gastos/edit/999", data={
+        "descricao": "Gasto Atualizado",
+        "categoria": "Transporte",
+        "valor": "50.00",
+        "data": "2026-10-02",
+        "due_date": "2026-10-02",
+        "user_name": "bruno",
+        "nature": "daily",
+        "is_paid": "1",
+        "mes_ano": "2026-10"
+    }, follow_redirects=False)
+    assert res_edit_gst.status_code == 303
+    assert "/gastos" in res_edit_gst.headers.get("location")
+
+    # 4. Exclusão de gasto
+    res_del_gst = client.post("/gastos/delete/999?mes_ano=2026-10", follow_redirects=False)
+    assert res_del_gst.status_code == 303
+    assert "/gastos" in res_del_gst.headers.get("location")
+

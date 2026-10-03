@@ -125,10 +125,16 @@
                 <span>Cartões de Crédito</span>
             </a>
 
-            <a href="/lancamentos?user_name={{ active_user_filter or '' }}" 
-               class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all group {% if current_page == 'lancamentos' %}bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
-                <span class="mr-3 text-base group-hover:scale-110 transition-transform">💵</span>
-                <span>Receitas & Gastos</span>
+            <a href="/receitas?user_name={{ active_user_filter or '' }}" 
+               class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all group {% if current_page == 'receitas' %}bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
+                <span class="mr-3 text-base group-hover:scale-110 transition-transform">🟢</span>
+                <span>Receitas</span>
+            </a>
+
+            <a href="/gastos?user_name={{ active_user_filter or '' }}" 
+               class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all group {% if current_page == 'gastos' %}bg-indigo-600 text-white shadow-md shadow-indigo-600/30 font-semibold{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
+                <span class="mr-3 text-base group-hover:scale-110 transition-transform">🔴</span>
+                <span>Gastos</span>
             </a>
 
             <a href="/investimentos" 
