@@ -403,3 +403,20 @@ def test_usuario_comum_nao_pode_alterar_outro_usuario():
     data = res.json()
     assert data["success"] is False
     assert "permissão" in data["message"].lower()
+
+def test_edit_conta_action_success():
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno", role="admin")
+    client.cookies.set("finance_session", token)
+
+    res = client.post("/contas/edit/166", data={
+        "descricao": "Terapia",
+        "valor": "320.00",
+        "data_vencimento": "2026-10-10",
+        "categoria": "Saúde",
+        "user_name": "bruno",
+        "mes_ano": "2026-10"
+    }, follow_redirects=False)
+
+    assert res.status_code == 303
+    assert "/contas" in res.headers.get("location")

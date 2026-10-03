@@ -7,7 +7,7 @@ import getpass
 import json
 from decimal import Decimal
 from datetime import datetime, date
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Union
 import psycopg
 from psycopg import Connection
 from dotenv import load_dotenv
@@ -1501,19 +1501,30 @@ def project_annual_fixed_expenses(year: Optional[int] = None, start_month: int =
     }
 
 def update_monthly_bill(
-    record_id: int, 
-    new_amount: float, 
+    record_id: Optional[Union[int, str]] = None, 
+    new_amount: float = 0.0, 
     new_due_date: Optional[str] = None, 
     propagate_future: bool = False,
     user_name: Optional[str] = None,
     category: Optional[str] = None,
-    description: Optional[str] = None
+    description: Optional[str] = None,
+    bill_id: Optional[Union[int, str]] = None,
+    month_year: Optional[str] = None,
+    **kwargs
 ) -> bool:
     """
     Atualiza o valor e/ou data de vencimento de uma conta mensal.
     Se propagate_future for True, propaga o novo valor para as mesmas contas
     dos meses subsequentes que ainda estejam em aberto (is_paid = FALSE).
     """
+    target_id = record_id if record_id is not None else bill_id
+    if target_id is None:
+        return False
+    try:
+        rec_id = int(target_id)
+    except (ValueError, TypeError):
+        return False
+
     try:
         conn = get_connection()
         with conn.cursor() as cur:
@@ -1522,7 +1533,7 @@ def update_monthly_bill(
                 SELECT description, category, due_date, nature
                 FROM financial_records
                 WHERE id = %s AND active = TRUE
-            """, (record_id,))
+            """, (rec_id,))
             row = cur.fetchone()
             if not row:
                 conn.close()
@@ -1546,7 +1557,7 @@ def update_monthly_bill(
                 sql_update += ", description = %s"
                 params.append(clean_string(description))
             sql_update += " WHERE id = %s"
-            params.append(record_id)
+            params.append(rec_id)
             cur.execute(sql_update, tuple(params))
             
             # 3. Se propagate_future for True, propaga para meses posteriores do mesmo ano

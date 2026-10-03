@@ -307,8 +307,11 @@ async def edit_conta_action(
 ):
     m, y, mes_ano_db = parse_month_year(mes_ano)
     propagate = (propagar_futuros == "on" or propagar_futuros == "true")
+    rec_id = int(record_id) if str(record_id).isdigit() else record_id
+
     db.update_monthly_bill(
-        bill_id=record_id,
+        record_id=rec_id,
+        bill_id=str(record_id),
         new_amount=float(valor),
         new_due_date=data_vencimento,
         propagate_future=propagate,
