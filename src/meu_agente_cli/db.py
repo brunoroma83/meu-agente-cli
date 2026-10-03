@@ -17,7 +17,7 @@ load_dotenv()
 from meu_agente_cli.config import load_bootstrap_config, clean_string
 from meu_agente_cli.security import hash_password, verify_password, generate_mcp_token, hash_token
 
-DB_NAME = os.environ.get("DB_NAME") or "meu_agente_db"
+DB_NAME = os.environ.get("FINANCEIRO_DB_NAME") or os.environ.get("DB_NAME") or "financeiro_db"
 
 def run_wsl_command(cmd_list: list) -> subprocess.CompletedProcess:
     """Executa um comando no WSL."""
@@ -108,8 +108,8 @@ def get_connection(dbname: Optional[str] = None) -> Connection:
         dbname = DB_NAME
 
     cfg = load_bootstrap_config()
-    db_user = os.environ.get("DB_USER") or cfg.get("db_user", "postgres")
-    db_pass = os.environ.get("DB_PASSWORD") or cfg.get("db_password", "")
+    db_user = os.environ.get("FINANCEIRO_DB_USER") or os.environ.get("DB_USER") or cfg.get("db_user", "postgres")
+    db_pass = os.environ.get("FINANCEIRO_DB_PASSWORD") or os.environ.get("DB_PASSWORD") or cfg.get("db_password", "")
     db_host = os.environ.get("DB_HOST") or cfg.get("db_host", "127.0.0.1")
     db_port_val = os.environ.get("DB_PORT") or cfg.get("db_port", 5432)
 
@@ -151,59 +151,68 @@ def init_database() -> bool:
     connected = False
     conn = None
 
-    while not connected:
-        try:
-            conn = get_connection(dbname="postgres")
-            connected = True
-        except psycopg.Error as e:
-            err_msg = str(e)
-            # Se for erro de senha / autenticação, solicita credenciais interativamente
-            if "password" in err_msg or "authentication" in err_msg or "fe_sendauth" in err_msg:
-                if os.environ.get("DB_HOST") or os.path.exists("/.dockerenv"):
-                    logging.error("Erro de autenticação com o banco de dados configurado via ambiente: %s", e)
-                    print(f"[ERROR] Erro de autenticação com o banco de dados configurado via ambiente: {e}", file=sys.stderr)
+    # 1. Tenta conectar diretamente ao banco alvo DB_NAME primeiro
+    try:
+        conn = get_connection(dbname=DB_NAME)
+        connected = True
+        conn.close()
+    except Exception:
+        pass
+
+    if not connected:
+        while not connected:
+            try:
+                conn = get_connection(dbname="postgres")
+                connected = True
+            except psycopg.Error as e:
+                err_msg = str(e)
+                # Se for erro de senha / autenticação, solicita credenciais interativamente
+                if "password" in err_msg or "authentication" in err_msg or "fe_sendauth" in err_msg:
+                    if os.environ.get("DB_HOST") or os.path.exists("/.dockerenv"):
+                        logging.error("Erro de autenticação com o banco de dados configurado via ambiente: %s", e)
+                        print(f"[ERROR] Erro de autenticação com o banco de dados configurado via ambiente: {e}", file=sys.stderr)
+                        return False
+
+                    print(f"\n[POSTGRES] Erro de autenticação: {err_msg.strip()}")
+                    print("Por favor, forneça as credenciais de acesso TCP/IP para o PostgreSQL no WSL.")
+                    
+                    db_user = input(f"Usuário PostgreSQL [{cfg.get('db_user', 'postgres')}]: ").strip() or cfg.get('db_user', 'postgres')
+                    db_pass = getpass.getpass("Senha PostgreSQL: ")
+                    db_host = input(f"Host [{cfg.get('db_host', '127.0.0.1')}]: ").strip() or cfg.get('db_host', '127.0.0.1')
+                    db_port_str = input(f"Porta [{cfg.get('db_port', 5432)}]: ").strip()
+                    db_port = int(db_port_str) if db_port_str.isdigit() else cfg.get('db_port', 5432)
+                    
+                    # Salva no arquivo de bootstrap config.json
+                    cfg["db_user"] = db_user
+                    cfg["db_password"] = db_pass
+                    cfg["db_host"] = db_host
+                    cfg["db_port"] = db_port
+                    
+                    from meu_agente_cli.config import save_bootstrap_config
+                    save_bootstrap_config(cfg)
+                else:
+                    # Outro erro de conexão
+                    logging.error("Erro ao conectar ao banco de dados: %s", e)
+                    print(f"[ERROR] Erro ao conectar ao banco de dados: {e}", file=sys.stderr)
                     return False
 
-                print(f"\n[POSTGRES] Erro de autenticação: {err_msg.strip()}")
-                print("Por favor, forneça as credenciais de acesso TCP/IP para o PostgreSQL no WSL.")
-                
-                db_user = input(f"Usuário PostgreSQL [{cfg.get('db_user', 'postgres')}]: ").strip() or cfg.get('db_user', 'postgres')
-                db_pass = getpass.getpass("Senha PostgreSQL: ")
-                db_host = input(f"Host [{cfg.get('db_host', '127.0.0.1')}]: ").strip() or cfg.get('db_host', '127.0.0.1')
-                db_port_str = input(f"Porta [{cfg.get('db_port', 5432)}]: ").strip()
-                db_port = int(db_port_str) if db_port_str.isdigit() else cfg.get('db_port', 5432)
-                
-                # Salva no arquivo de bootstrap config.json
-                cfg["db_user"] = db_user
-                cfg["db_password"] = db_pass
-                cfg["db_host"] = db_host
-                cfg["db_port"] = db_port
-                
-                from meu_agente_cli.config import save_bootstrap_config
-                save_bootstrap_config(cfg)
-            else:
-                # Outro erro de conexão
-                logging.error("Erro ao conectar ao banco de dados: %s", e)
-                print(f"[ERROR] Erro ao conectar ao banco de dados: {e}", file=sys.stderr)
-                return False
-
-    # Conecta primeiro ao banco default 'postgres' para verificar/criar o banco 'meu_agente_cli'
-    try:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            # Verifica se o banco existe
-            cur.execute(f"SELECT 1 FROM pg_database WHERE datname = '{DB_NAME}'")
-            exists = cur.fetchone()
-            if not exists:
-                print(f"[INFO] Criando banco de dados '{DB_NAME}'...")
-                cur.execute(f"CREATE DATABASE {DB_NAME}")
-        conn.close()
-    except Exception as e:
-        logging.exception("Erro ao conectar ou criar banco de dados inicial")
-        print(f"[ERROR] Erro ao conectar ou criar banco de dados inicial: {e}", file=sys.stderr)
-        if conn:
+        # Conecta primeiro ao banco default 'postgres' para verificar/criar o banco
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                # Verifica se o banco existe
+                cur.execute(f"SELECT 1 FROM pg_database WHERE datname = '{DB_NAME}'")
+                exists = cur.fetchone()
+                if not exists:
+                    print(f"[INFO] Criando banco de dados '{DB_NAME}'...")
+                    cur.execute(f"CREATE DATABASE {DB_NAME}")
             conn.close()
-        return False
+        except Exception as e:
+            logging.exception("Erro ao conectar ou criar banco de dados inicial")
+            print(f"[ERROR] Erro ao conectar ou criar banco de dados inicial: {e}", file=sys.stderr)
+            if conn:
+                conn.close()
+            return False
 
     # Conecta ao banco 'meu_agente_cli' e cria as tabelas
     try:
