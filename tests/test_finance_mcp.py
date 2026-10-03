@@ -537,3 +537,46 @@ def test_web_app_receitas_and_gastos_edit_delete():
     assert res_del_gst.status_code == 303
     assert "/gastos" in res_del_gst.headers.get("location")
 
+
+def test_invest_evolucao_patrimonial_anual():
+    import meu_agente_cli.invest as invest
+    evolucao = invest.get_evolucao_patrimonial_anual(meses=12)
+    assert "labels" in evolucao
+    assert "patrimonio_final" in evolucao
+    assert "saldo_aportes_resgates" in evolucao
+    assert len(evolucao["labels"]) == 12
+    assert len(evolucao["patrimonio_final"]) == 12
+    assert len(evolucao["saldo_aportes_resgates"]) == 12
+    assert all(isinstance(lbl, str) for lbl in evolucao["labels"])
+    assert all(isinstance(v, (int, float)) for v in evolucao["patrimonio_final"])
+    assert all(isinstance(s, (int, float)) for s in evolucao["saldo_aportes_resgates"])
+
+
+def test_invest_todas_movimentacoes_unificadas():
+    import meu_agente_cli.invest as invest
+    movs = invest.get_todas_movimentacoes_unificadas(limit=50)
+    assert isinstance(movs, list)
+    if movs:
+        m = movs[0]
+        assert "id" in m
+        assert "categoria" in m
+        assert "ativo" in m
+        assert "tipo_operacao" in m
+        assert "tipo_semantico" in m
+        assert "valor" in m
+
+
+def test_web_app_investimentos_view():
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno Roma", role="admin")
+    client.cookies.set("finance_session", token)
+
+    res = client.get("/investimentos")
+    assert res.status_code == 200
+    assert "chartAlocacaoMacro" in res.text
+    assert "chartEvolucaoPatrimonial" in res.text
+    assert "Histórico de Movimentações" in res.text
+    assert "tab-content-todas" in res.text
+    assert "tab-content-acoes" in res.text
+    assert "tab-content-rf" in res.text
+

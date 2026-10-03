@@ -801,6 +801,11 @@ async def investimentos_view(request: Request):
     resumo = invest.get_resumo_patrimonial_geral()
     acoes = invest.get_consolidado_acoes(fetch_market_prices=False)
     renda_fixa = invest.get_consolidado_renda_fixa(active_only=True)
+    alocacao_macro = invest.get_alocacao_macro()
+    evolucao = invest.get_evolucao_patrimonial_anual(meses=12)
+    movimentacoes_rf = invest.get_movimentacoes_renda_fixa()
+    movimentacoes_acoes = invest.get_movimentacoes_acoes()
+    todas_movimentacoes = invest.get_todas_movimentacoes_unificadas(limit=100)
     
     return templates.TemplateResponse(request=request, name="investimentos.html", context={
         "user": user,
@@ -808,7 +813,12 @@ async def investimentos_view(request: Request):
         "active_user_filter": "",
         "resumo": resumo,
         "acoes": acoes,
-        "renda_fixa": renda_fixa
+        "renda_fixa": renda_fixa,
+        "alocacao_macro": alocacao_macro,
+        "evolucao": evolucao,
+        "movimentacoes_rf": movimentacoes_rf,
+        "movimentacoes_acoes": movimentacoes_acoes,
+        "todas_movimentacoes": todas_movimentacoes
     })
 
 @app.post("/investimentos/add_acao")

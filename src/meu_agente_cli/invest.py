@@ -834,6 +834,162 @@ def get_alocacao_por_instituicao() -> Dict[str, float]:
     return aloc
 
 
+def get_evolucao_patrimonial_anual(meses: int = 12) -> Dict[str, Any]:
+    """
+    Calcula a evolução do patrimônio final e o saldo líquido de aportes/resgates mês a mês
+    para o intervalo de meses especificado (padrão: 12 meses).
+    """
+    import calendar
+    from datetime import datetime
+    
+    now = datetime.now()
+    meses_lista = []
+    for i in range(meses - 1, -1, -1):
+        year_offset = (now.month - 1 - i) // 12
+        y = now.year + year_offset
+        m = (now.month - 1 - i) % 12 + 1
+        meses_lista.append((y, m))
+
+    meses_nomes = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun', 7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
+
+    labels = []
+    saldos_aportes = []
+    patrimonios = []
+    aportes_detalhe = []
+    resgates_detalhe = []
+
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT tipo_movimentacao, valor, data_movimentacao FROM movimentacao_renda_fixa ORDER BY data_movimentacao ASC")
+            rf_movs = cur.fetchall()
+
+            cur.execute("SELECT operacao, valor_total, data_operacao FROM movimentacao_acoes ORDER BY data_operacao ASC")
+            acoes_movs = cur.fetchall()
+
+            cur.execute("SELECT SUM(valor_atual) FROM investimentos WHERE active = TRUE")
+            res_tot = cur.fetchone()
+            tot_atual = float(res_tot[0]) if res_tot and res_tot[0] is not None else 0.0
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar dados de evolução patrimonial: {e}", file=sys.stderr)
+        rf_movs, acoes_movs, tot_atual = [], [], 0.0
+
+    for y, m in meses_lista:
+        label = f"{meses_nomes[m]}/{str(y)[2:]}"
+        labels.append(label)
+        
+        last_day = calendar.monthrange(y, m)[1]
+        end_of_month = f"{y:04d}-{m:02d}-{last_day:02d}"
+        
+        aportes_m = 0.0
+        resgates_m = 0.0
+        
+        for tipo, val, dt in rf_movs:
+            if dt and dt.year == y and dt.month == m:
+                if tipo in ('APORTE', 'APLICACAO'):
+                    aportes_m += float(val)
+                elif tipo == 'RESGATE':
+                    resgates_m += float(val)
+                    
+        for op, val, dt in acoes_movs:
+            if dt and dt.year == y and dt.month == m:
+                if op == 'COMPRA':
+                    aportes_m += float(val)
+                elif op == 'VENDA':
+                    resgates_m += float(val)
+                    
+        saldo_mov = round(aportes_m - resgates_m, 2)
+        saldos_aportes.append(saldo_mov)
+        aportes_detalhe.append(round(aportes_m, 2))
+        resgates_detalhe.append(round(resgates_m, 2))
+        
+        rf_acum = 0.0
+        for tipo, val, dt in rf_movs:
+            if dt:
+                dt_str = dt.strftime('%Y-%m-%d')
+                if dt_str <= end_of_month:
+                    if tipo in ('APORTE', 'APLICACAO', 'RENDIMENTO'):
+                        rf_acum += float(val)
+                    elif tipo == 'RESGATE':
+                        rf_acum -= float(val)
+                    
+        acoes_acum = 0.0
+        for op, val, dt in acoes_movs:
+            if dt:
+                dt_str = dt.strftime('%Y-%m-%d')
+                if dt_str <= end_of_month:
+                    if op == 'COMPRA':
+                        acoes_acum += float(val)
+                    elif op == 'VENDA':
+                        acoes_acum -= float(val)
+                    
+        if y == now.year and m == now.month:
+            patrimonio_m = round(tot_atual, 2)
+        else:
+            patrimonio_m = round(max(0.0, rf_acum + acoes_acum), 2)
+            
+        patrimonios.append(patrimonio_m)
+
+    return {
+        "labels": labels,
+        "patrimonio_final": patrimonios,
+        "saldo_aportes_resgates": saldos_aportes,
+        "aportes": aportes_detalhe,
+        "resgates": resgates_detalhe
+    }
+
+
+def get_todas_movimentacoes_unificadas(limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    Retorna o extrato unificado e cronológico de movimentações tanto de Ações quanto de Renda Fixa.
+    """
+    lista = []
+    
+    rf_movs = get_movimentacoes_renda_fixa()
+    for m in rf_movs:
+        tipo = m.get("tipo_movimentacao", "MOVIMENTAÇÃO")
+        lista.append({
+            "id": f"rf-{m['id']}",
+            "categoria": "Renda Fixa",
+            "ativo": m.get("nome_titulo", "Título de Renda Fixa"),
+            "subtitulo": m.get("nome_banco") or m.get("classe") or "-",
+            "tipo_operacao": tipo,
+            "tipo_semantico": "entrada" if tipo in ("APORTE", "APLICACAO", "RENDIMENTO") else "saida",
+            "valor": float(m.get("valor", 0.0)),
+            "data": m.get("data_movimentacao"),
+            "detalhes": f"Classe: {m.get('classe', 'RENDA FIXA')}"
+        })
+        
+    acoes_movs = get_movimentacoes_acoes()
+    for a in acoes_movs:
+        op = a.get("operacao", "COMPRA")
+        qtd = a.get("quantidade", 0)
+        preco = a.get("preco_unitario", 0.0)
+        lista.append({
+            "id": f"acao-{a['id']}",
+            "categoria": "Ações",
+            "ativo": a.get("codigo_acao", "AÇÃO"),
+            "subtitulo": f"{qtd} cotas @ R$ {preco:.2f}",
+            "tipo_operacao": op,
+            "tipo_semantico": "entrada" if op in ("COMPRA", "DIVIDENDO", "JCP") else "saida",
+            "valor": float(a.get("valor_total", 0.0)),
+            "data": a.get("data_operacao"),
+            "detalhes": f"Taxas: R$ {float(a.get('taxas', 0.0)):.2f}"
+        })
+        
+    def sort_key(item):
+        d = item.get("data")
+        if d:
+            if hasattr(d, "strftime"):
+                return d.strftime("%Y-%m-%d")
+            return str(d)
+        return ""
+        
+    lista.sort(key=sort_key, reverse=True)
+    return lista[:limit]
+
+
 # =====================================================================
 # FUNÇÕES DE COMPATIBILIDADE RETROATIVA (LEGACY)
 # =====================================================================
