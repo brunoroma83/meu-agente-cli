@@ -307,6 +307,99 @@ def test_mcp_listar_cartoes_credito():
     nomes = [c["nome"] for c in cards]
     assert "Porto Seguro" in nomes or "C6" in nomes
 
+def test_alterar_senha_propria_sucesso():
+    import meu_agente_cli.db as db
+    client = TestClient(app)
+    
+    # Faz login como bruno
+    login_res = client.post("/login", data={"username": "bruno", "password": "bruno123"}, follow_redirects=False)
+    assert login_res.status_code == 303
+    session_cookie = login_res.cookies.get("finance_session")
+    client.cookies.set("finance_session", session_cookie)
+    
+    # Altera senha própria
+    res = client.post("/perfil/alterar-senha", data={
+        "target_user": "bruno",
+        "senha_atual": "bruno123",
+        "nova_senha": "senha_teste_456",
+        "confirma_senha": "senha_teste_456"
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert "sucesso" in data["message"].lower()
+    
+    # Verifica autenticação com a nova senha
+    assert db.authenticate_user("bruno", "senha_teste_456") is not None
+    assert db.authenticate_user("bruno", "bruno123") is None
+    
+    # Restaura senha padrão
+    db.update_user_password("bruno", "bruno123")
 
+def test_alterar_senha_senha_atual_incorreta():
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno", role="admin")
+    client.cookies.set("finance_session", token)
+    
+    res = client.post("/perfil/alterar-senha", data={
+        "target_user": "bruno",
+        "senha_atual": "senha_errada_xyz",
+        "nova_senha": "nova_senha_123",
+        "confirma_senha": "nova_senha_123"
+    })
+    assert res.status_code == 400
+    data = res.json()
+    assert data["success"] is False
+    assert "atual está incorreta" in data["message"].lower()
 
+def test_alterar_senha_confirmacao_invalida():
+    client = TestClient(app)
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno", role="admin")
+    client.cookies.set("finance_session", token)
+    
+    res = client.post("/perfil/alterar-senha", data={
+        "target_user": "bruno",
+        "senha_atual": "bruno123",
+        "nova_senha": "nova_senha_123",
+        "confirma_senha": "senha_diferente"
+    })
+    assert res.status_code == 400
+    data = res.json()
+    assert data["success"] is False
+    assert "não confere" in data["message"].lower()
 
+def test_admin_redefinir_senha_outro_usuario():
+    import meu_agente_cli.db as db
+    client = TestClient(app)
+    # Bruno (admin) redefinindo senha de Fabiana
+    token = sec.create_session_token(user_name="bruno", display_name="Bruno", role="admin")
+    client.cookies.set("finance_session", token)
+    
+    res = client.post("/perfil/alterar-senha", data={
+        "target_user": "fabiana",
+        "nova_senha": "nova_fabiana_senha",
+        "confirma_senha": "nova_fabiana_senha"
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert db.authenticate_user("fabiana", "nova_fabiana_senha") is not None
+    
+    # Restaura senha de Fabiana
+    db.update_user_password("fabiana", "fabiana123")
+
+def test_usuario_comum_nao_pode_alterar_outro_usuario():
+    client = TestClient(app)
+    # Fabiana (user comum) tentando alterar a senha de Bruno
+    token = sec.create_session_token(user_name="fabiana", display_name="Fabiana", role="user")
+    client.cookies.set("finance_session", token)
+    
+    res = client.post("/perfil/alterar-senha", data={
+        "target_user": "bruno",
+        "nova_senha": "senha_hacker_123",
+        "confirma_senha": "senha_hacker_123"
+    })
+    assert res.status_code == 403
+    data = res.json()
+    assert data["success"] is False
+    assert "permissão" in data["message"].lower()

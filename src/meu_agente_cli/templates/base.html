@@ -79,9 +79,14 @@
                         </div>
                     </div>
                 </div>
-                <a href="/logout" title="Sair da Conta" class="text-xs text-rose-400 hover:text-rose-300 px-2 py-1 rounded bg-rose-950/30 hover:bg-rose-950/60 border border-rose-900/40 transition">
-                    Sair
-                </a>
+                <div class="flex items-center space-x-1.5 shrink-0">
+                    <button type="button" onclick="openChangePasswordModal()" title="Alterar Senha" class="text-xs text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded bg-indigo-950/30 hover:bg-indigo-950/60 border border-indigo-900/40 transition">
+                        🔑
+                    </button>
+                    <a href="/logout" title="Sair da Conta" class="text-xs text-rose-400 hover:text-rose-300 px-2 py-1 rounded bg-rose-950/30 hover:bg-rose-950/60 border border-rose-900/40 transition">
+                        Sair
+                    </a>
+                </div>
             </div>
 
             <!-- Titular Filter Selector -->
@@ -162,6 +167,67 @@
     <!-- Toast Notifications Container -->
     <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
+    <!-- Modal: Alterar Senha -->
+    <div id="modal-change-password" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-4 pb-3 border-b border-slate-800">
+                <div class="flex items-center space-x-2">
+                    <span class="p-1.5 bg-indigo-600/20 text-indigo-400 rounded-lg border border-indigo-500/30 text-base">🔑</span>
+                    <h3 class="text-base font-bold text-white">Alterar Senha de Acesso</h3>
+                </div>
+                <button type="button" onclick="closeChangePasswordModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+            </div>
+
+            <form id="form-change-password" onsubmit="submitChangePassword(event)" class="space-y-4 text-xs">
+                {% if user and user.role == 'admin' %}
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Usuário Alvo</label>
+                    <select id="cp_target_user" name="target_user" onchange="handleTargetUserChange(this.value)"
+                            class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs focus:ring-2 focus:ring-indigo-500">
+                        <option value="{{ user.user_name }}">{{ user.display_name }} (Minha própria conta)</option>
+                        <option value="fabiana" {% if user.user_name == 'fabiana' %}disabled{% endif %}>Fabiana</option>
+                        <option value="bruno" {% if user.user_name == 'bruno' %}disabled{% endif %}>Bruno</option>
+                    </select>
+                    <p class="text-[11px] text-slate-500 mt-1">Como administrador, você pode redefinir a senha de outro usuário sem precisar da senha atual dele.</p>
+                </div>
+                {% else %}
+                <input type="hidden" id="cp_target_user" name="target_user" value="{{ user.user_name if user else 'bruno' }}">
+                {% endif %}
+
+                <div id="cp_group_senha_atual">
+                    <label class="block text-slate-400 mb-1 font-medium">Senha Atual</label>
+                    <input type="password" id="cp_senha_atual" name="senha_atual" placeholder="••••••••"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs focus:ring-2 focus:ring-indigo-500">
+                </div>
+
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Nova Senha (mínimo 6 caracteres)</label>
+                    <input type="password" id="cp_nova_senha" name="nova_senha" required minlength="6" placeholder="••••••••"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs focus:ring-2 focus:ring-indigo-500">
+                </div>
+
+                <div>
+                    <label class="block text-slate-400 mb-1 font-medium">Confirmar Nova Senha</label>
+                    <input type="password" id="cp_confirma_senha" name="confirma_senha" required minlength="6" placeholder="••••••••"
+                           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs focus:ring-2 focus:ring-indigo-500">
+                </div>
+
+                <div id="cp_alert" class="hidden p-2.5 rounded-lg text-xs"></div>
+
+                <div class="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+                    <button type="button" onclick="closeChangePasswordModal()"
+                            class="px-3.5 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 font-medium">
+                        Cancelar
+                    </button>
+                    <button type="submit" id="cp_btn_submit"
+                            class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium shadow shadow-indigo-600/30">
+                        Salvar Nova Senha
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         function showToast(message, type = 'success') {
             const container = document.getElementById('toast-container');
@@ -174,6 +240,80 @@
                 toast.style.opacity = '0';
                 setTimeout(() => toast.remove(), 300);
             }, 3500);
+        }
+
+        const currentSessionUserName = "{{ (user.user_name if user else '').lower() }}";
+
+        function openChangePasswordModal() {
+            const modal = document.getElementById('modal-change-password');
+            if (!modal) return;
+            const form = document.getElementById('form-change-password');
+            form.reset();
+            const alertBox = document.getElementById('cp_alert');
+            alertBox.className = 'hidden';
+            alertBox.textContent = '';
+            handleTargetUserChange(document.getElementById('cp_target_user')?.value || currentSessionUserName);
+            modal.classList.remove('hidden');
+        }
+
+        function closeChangePasswordModal() {
+            document.getElementById('modal-change-password')?.classList.add('hidden');
+        }
+
+        function handleTargetUserChange(targetUser) {
+            const groupAtual = document.getElementById('cp_group_senha_atual');
+            const inputAtual = document.getElementById('cp_senha_atual');
+            if (!groupAtual || !inputAtual) return;
+            if (targetUser.toLowerCase() === currentSessionUserName) {
+                groupAtual.classList.remove('hidden');
+                inputAtual.required = true;
+            } else {
+                groupAtual.classList.add('hidden');
+                inputAtual.required = false;
+                inputAtual.value = '';
+            }
+        }
+
+        async function submitChangePassword(e) {
+            e.preventDefault();
+            const form = document.getElementById('form-change-password');
+            const btn = document.getElementById('cp_btn_submit');
+            const alertBox = document.getElementById('cp_alert');
+            
+            const formData = new FormData(form);
+            const nova = formData.get('nova_senha');
+            const confirma = formData.get('confirma_senha');
+
+            if (nova !== confirma) {
+                alertBox.className = 'p-2.5 rounded-lg text-xs bg-rose-950/80 border border-rose-800 text-rose-300';
+                alertBox.textContent = 'A confirmação da nova senha não confere.';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Salvando...';
+            alertBox.className = 'hidden';
+
+            try {
+                const res = await fetch('/perfil/alterar-senha', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast(data.message, 'success');
+                    closeChangePasswordModal();
+                } else {
+                    alertBox.className = 'p-2.5 rounded-lg text-xs bg-rose-950/80 border border-rose-800 text-rose-300';
+                    alertBox.textContent = data.message || 'Erro ao alterar senha.';
+                }
+            } catch (err) {
+                alertBox.className = 'p-2.5 rounded-lg text-xs bg-rose-950/80 border border-rose-800 text-rose-300';
+                alertBox.textContent = 'Erro de comunicação com o servidor: ' + err.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Salvar Nova Senha';
+            }
         }
     </script>
     {% block scripts %}{% endblock %}

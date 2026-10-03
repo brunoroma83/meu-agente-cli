@@ -144,6 +144,42 @@ async def logout_action():
     response.delete_cookie(COOKIE_NAME)
     return response
 
+@app.post("/perfil/alterar-senha")
+async def alterar_senha_action(
+    request: Request,
+    target_user: str = Form(...),
+    senha_atual: Optional[str] = Form(None),
+    nova_senha: str = Form(...),
+    confirma_senha: str = Form(...)
+):
+    current_user = request.state.user
+    target_user = target_user.strip().lower()
+    
+    if not nova_senha or len(nova_senha) < 6:
+        return JSONResponse({"success": False, "message": "A nova senha deve ter no mínimo 6 caracteres."}, status_code=400)
+        
+    if nova_senha != confirma_senha:
+        return JSONResponse({"success": False, "message": "A confirmação da nova senha não confere."}, status_code=400)
+
+    is_self = (current_user.get("user_name", "").lower() == target_user)
+    is_admin = (current_user.get("role") == "admin")
+    
+    if not is_self and not is_admin:
+        return JSONResponse({"success": False, "message": "Você não tem permissão para alterar a senha de outro usuário."}, status_code=403)
+        
+    if is_self:
+        if not senha_atual:
+            return JSONResponse({"success": False, "message": "Informe sua senha atual para confirmação."}, status_code=400)
+        auth = db.authenticate_user(target_user, senha_atual)
+        if not auth:
+            return JSONResponse({"success": False, "message": "A senha atual está incorreta."}, status_code=400)
+
+    ok = db.update_user_password(target_user, nova_senha)
+    if ok:
+        return JSONResponse({"success": True, "message": f"Senha do usuário '{target_user}' alterada com sucesso!"})
+    else:
+        return JSONResponse({"success": False, "message": "Não foi possível atualizar a senha. Tente novamente."}, status_code=500)
+
 @app.get("/")
 async def root():
     return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
