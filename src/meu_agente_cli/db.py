@@ -3191,7 +3191,7 @@ def seed_default_users():
                         """,
                         (u_name, d_name, p_hash, role)
                     )
-                elif not row[1]:
+                elif not row[1] or os.environ.get("RESET_DEFAULT_PASSWORDS", "").lower() in ("true", "1", "yes"):
                     p_hash = hash_password(pwd)
                     cur.execute(
                         """
@@ -3228,6 +3228,12 @@ def authenticate_user(user_name: str, plain_password: str) -> Optional[Dict[str,
         u_id, u_name, d_name, p_hash, role = row
         if not p_hash or not verify_password(plain_password, p_hash):
             return None
+        # Se for hash legado de 64 caracteres, atualiza automaticamente para PBKDF2
+        if len(p_hash) == 64:
+            try:
+                update_user_password(u_name, plain_password)
+            except Exception:
+                pass
         return {
             "user_id": u_id,
             "user_name": u_name,

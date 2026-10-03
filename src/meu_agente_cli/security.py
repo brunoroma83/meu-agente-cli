@@ -19,6 +19,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         parts = hashed_password.split("$")
         if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+            # Suporte a migração transparente de hashes legados (SHA-256 com salt fixo)
+            if len(hashed_password) == 64:
+                legacy_salt = "meu_agente_sal_seguro"
+                legacy_hash = hashlib.sha256((plain_password + legacy_salt).encode("utf-8")).hexdigest()
+                return secrets.compare_digest(legacy_hash, hashed_password)
             return False
         iterations = int(parts[1])
         salt = bytes.fromhex(parts[2])
