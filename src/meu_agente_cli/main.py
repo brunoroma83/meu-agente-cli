@@ -19,19 +19,19 @@ console = Console()
 
 def print_banner():
     banner_text = Text()
-    banner_text.append("MEU AGENTE CLI - Assistente Pessoal & Financeiro Inteligente\n", style="bold cyan")
-    banner_text.append("Seu assistente pessoal de produtividade e finanças no WSL/Docker\n\n", style="italic gray")
-    banner_text.append("Versão: v1.1.0\n", style="bold white")
-    banner_text.append("Última Atualização: 08/08/2026\n\n", style="bold white")
+    banner_text.append("MEU AGENTE CLI - Assistente Pessoal de IA com Suporte a MCP\n", style="bold cyan")
+    banner_text.append("Seu assistente autônomo de inteligência artificial no WSL/Docker\n\n", style="italic gray")
+    banner_text.append("Versão: v2.0.0\n", style="bold white")
+    banner_text.append("Última Atualização: 18/10/2026\n\n", style="bold white")
     banner_text.append("Principais Funcionalidades:\n", style="bold yellow")
     banner_text.append(" - 🛡️ Whitelist de Segurança Criptográfica com Assinatura RSA\n", style="green")
-    banner_text.append(" - 💰 Finanças Pessoais com Soft Delete, Histórico e Projeções\n", style="green")
-    banner_text.append(" - 📥 Importador de CSV Financeiro com Mapeamento Inteligente\n", style="green")
+    banner_text.append(" - 🔌 Central MCP (Model Context Protocol) para Integrações Externas\n", style="green")
+    banner_text.append(" - 🤖 Central de Agentes Especialistas (Agent Hub & Meta-Agente)\n", style="green")
     banner_text.append(" - 🔐 Backup e Restauração Criptografados (AES-256 e Gzip)\n", style="green")
-    banner_text.append(" - 📝 Notas Persistentes de Longo Prazo no PostgreSQL\n", style="green")
-    banner_text.append(" - 🤖 Agendador de Subagentes em Segundo Plano (Cron Jobs)\n", style="green")
-    banner_text.append(" - 🧮 Calculadora Avançada em Lote e Hot reload de Plugins\n", style="green")
-    banner_text.append(" - 🌤️ Integrações Nativas de Clima, Ações Financeiras e Notícias RSS\n", style="green")
+    banner_text.append(" - 📝 Memória e Notas Persistentes de Longo Prazo no PostgreSQL\n", style="green")
+    banner_text.append(" - ⏰ Agendador de Subagentes em Segundo Plano (Cron Jobs)\n", style="green")
+    banner_text.append(" - 🧮 Calculadora Avançada em Lote e Hot reload de Ferramentas\n", style="green")
+    banner_text.append(" - 🌤️ Integrações Nativas de Clima, Cotações de Mercado e Notícias RSS\n", style="green")
     banner_text.append("---------------------------------------------------------------", style="blue")
     
     console.print(Panel(
@@ -54,26 +54,33 @@ def initialize_components() -> bool:
         
     # 2. Configura senha de segurança se não existir
     if not security.has_password_configured():
-        console.print(Panel(
-            "[bold yellow]Configuração de Segurança Inicial:[/bold yellow]\n"
-            "Como o agente pode executar comandos de terminal, você deve configurar uma senha de segurança.\n"
-            "Essa senha será solicitada para rodar comandos não-seguros ou entrar em Modo Não-Seguro.",
-            border_style="yellow"
-        ))
-        while True:
-            p1 = getpass.getpass("Digite a nova Senha de Segurança: ")
-            if not p1:
-                console.print("[red]A senha não pode ser vazia.[/red]")
-                continue
-            p2 = getpass.getpass("Confirme a Senha de Segurança: ")
-            if p1 == p2:
-                if security.configure_password(p1):
-                    console.print("[bold green][SUCESSO][/bold green] Senha de segurança configurada!")
-                    break
+        env_pwd = os.environ.get("SECURITY_PASSWORD")
+        if env_pwd:
+            if security.configure_password(env_pwd):
+                console.print("[bold green][SUCESSO][/bold green] Senha de segurança configurada via variável de ambiente!")
+        elif not sys.stdin.isatty():
+            console.print("[yellow]Aviso: Ambiente não-interativo e SECURITY_PASSWORD não definido. Pulando configuração inicial interativa de senha.[/yellow]")
+        else:
+            console.print(Panel(
+                "[bold yellow]Configuração de Segurança Inicial:[/bold yellow]\n"
+                "Como o agente pode executar comandos de terminal, você deve configurar uma senha de segurança.\n"
+                "Essa senha será solicitada para rodar comandos não-seguros ou entrar em Modo Não-Seguro.",
+                border_style="yellow"
+            ))
+            while True:
+                p1 = getpass.getpass("Digite a nova Senha de Segurança: ")
+                if not p1:
+                    console.print("[red]A senha não pode ser vazia.[/red]")
+                    continue
+                p2 = getpass.getpass("Confirme a Senha de Segurança: ")
+                if p1 == p2:
+                    if security.configure_password(p1):
+                        console.print("[bold green][SUCESSO][/bold green] Senha de segurança configurada!")
+                        break
+                    else:
+                        console.print("[red]Erro ao salvar senha no banco de dados. Tentando novamente...[/red]")
                 else:
-                    console.print("[red]Erro ao salvar senha no banco de dados. Tentando novamente...[/red]")
-            else:
-                console.print("[red]As senhas não coincidem. Tente novamente.[/red]")
+                    console.print("[red]As senhas não coincidem. Tente novamente.[/red]")
 
     # 3. Verifica conexão com LM Studio
     console.print("[blue]Testando conexão com o LM Studio...[/blue]")
@@ -153,410 +160,6 @@ def initialize_components() -> bool:
             db.set_setting("active_model", "google/gemma-4-31b-qat")
             
     return True
-
-def handle_finance_csv_import(console: Console) -> None:
-    """Importa receitas e despesas a partir de uploads/finance.csv com mapeamento dinâmico."""
-    import os
-    import csv
-    import shutil
-    import unicodedata
-    from datetime import datetime
-    from typing import Optional
-    
-    # Define caminhos
-    base_dir = os.getcwd()
-    uploads_dir = os.path.join(base_dir, "uploads")
-    archive_dir = os.path.join(uploads_dir, "archive")
-    csv_file = os.path.join(uploads_dir, "finance.csv")
-    
-    # Garante existência dos diretórios
-    os.makedirs(archive_dir, exist_ok=True)
-    
-    # 1. Se o arquivo não existir, exibe guia de formatação
-    if not os.path.exists(csv_file):
-        from rich.panel import Panel
-        from rich.table import Table
-        
-        guide_table = Table(title="Colunas Aceitas e Mapeamento Automático", expand=True)
-        guide_table.add_column("Campo no BD", style="cyan", width=15)
-        guide_table.add_column("Colunas Mapeadas (Qualquer uma)", style="magenta")
-        guide_table.add_column("Tipo/Regras", style="white")
-        
-        guide_table.add_row("type", "tipo, type, tiporegistro, transacao", "receita OU despesa (padrão: despesa)")
-        guide_table.add_row("category", "categoria, category, grupo, classificacao", "Obrigatório. Ex: Alimentação, Salário")
-        guide_table.add_row("amount", "valor, val, amount, preco, custo, total", "Obrigatório. Ex: 150.50 ou 1.500,00")
-        guide_table.add_row("description", "descricao, description, detalhes, obs", "Opcional. Texto descritivo")
-        guide_table.add_row("due_date", "vencimento, due_date, datavencimento, venc", "Opcional. Formatos: DD/MM/YYYY ou YYYY-MM-DD")
-        
-        console.print(Panel(
-            "[bold red][ERRO][/bold red] Arquivo não encontrado em [cyan]uploads/finance.csv[/cyan]!\n\n"
-            "[bold green]Para realizar a importação de lançamentos via CSV, siga este guia:[/bold green]\n"
-            "1. Crie a pasta [yellow]uploads/[/yellow] na raiz do projeto (se não existir).\n"
-            "2. Coloque nela o seu arquivo com o nome exato [yellow]finance.csv[/yellow].\n"
-            "3. O arquivo deve ter uma linha de cabeçalho com os nomes das colunas correspondentes.\n\n"
-            "O agente classificará e mapeará as colunas dinamicamente baseado nos nomes delas.\n",
-            title="Importador Financeiro de CSV",
-            border_style="yellow"
-        ))
-        console.print(guide_table)
-        console.print(
-            "\n[bold green]Exemplo de Conteúdo Ideal (finance.csv):[/bold green]\n"
-            "[dim]"
-            "tipo,categoria,valor,descricao,vencimento\n"
-            "receita,Salário,5500.00,Salário Mensal,05/08/2026\n"
-            "despesa,Aluguel,1200.00,Aluguel do Ap,10/08/2026\n"
-            "despesa,Supermercado,450.50,,12/08/2026\n"
-            "[/dim]"
-        )
-        return
-
-    # 2. Se o arquivo existir, processa
-    console.print(f"[info] Arquivo [cyan]uploads/finance.csv[/cyan] localizado. Iniciando análise de colunas...[/info]")
-    
-    # Helpers locais para normalização
-    def normalize(s: str) -> str:
-        s_clean = unicodedata.normalize('NFKD', s).encode('ASCII', 'ignore').decode('ASCII')
-        return s_clean.strip().lower().replace("_", "").replace(" ", "").replace("-", "")
-        
-    def parse_amount(val_str: str) -> float:
-        val_clean = val_str.replace("R$", "").replace(" ", "").strip()
-        if "," in val_clean:
-            if "." in val_clean:
-                val_clean = val_clean.replace(".", "").replace(",", ".")
-            else:
-                val_clean = val_clean.replace(",", ".")
-        return float(val_clean)
-        
-    def parse_due_date(date_str: str) -> Optional[str]:
-        if not date_str.strip():
-            return None
-        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-            try:
-                dt = datetime.strptime(date_str.strip(), fmt)
-                return dt.strftime("%Y-%m-%d")
-            except ValueError:
-                continue
-        return None
-
-    # Mapeamentos esperados
-    TYPE_KEYS = {"tipo", "type", "tiporegistro", "transacao", "categoriatipo"}
-    CATEGORY_KEYS = {"categoria", "category", "grupo", "classificacao"}
-    AMOUNT_KEYS = {"valor", "val", "amount", "preco", "custo", "total"}
-    DESC_KEYS = {"descricao", "description", "detalhes", "obs", "observacao"}
-    DUE_KEYS = {"vencimento", "due_date", "datavencimento", "datavenc", "venc", "due"}
-
-    items_to_import = []
-    
-    try:
-        with open(csv_file, "r", encoding="utf-8-sig") as f:
-            reader = csv.reader(f)
-            headers = next(reader, None)
-            
-            if not headers:
-                console.print("[bold red][ERRO][/bold red] O arquivo CSV está vazio.")
-                return
-                
-            # Classificação/Mapeamento das Colunas
-            col_map = {}
-            for idx, h in enumerate(headers):
-                h_norm = normalize(h)
-                if h_norm in TYPE_KEYS:
-                    col_map["type"] = idx
-                elif h_norm in CATEGORY_KEYS:
-                    col_map["category"] = idx
-                elif h_norm in AMOUNT_KEYS:
-                    col_map["amount"] = idx
-                elif h_norm in DESC_KEYS:
-                    col_map["description"] = idx
-                elif h_norm in DUE_KEYS:
-                    col_map["due_date"] = idx
-            
-            # Valida colunas obrigatórias
-            if "category" not in col_map or "amount" not in col_map:
-                console.print(
-                    "[bold red][ERRO][/bold red] Não foi possível mapear automaticamente as colunas obrigatórias!\n"
-                    f"Colunas lidas: {headers}\n"
-                    f"Mapeamento obtido: {list(col_map.keys())}\n"
-                    "Certifique-se de que o cabeçalho tem pelo menos colunas equivalentes a 'categoria' e 'valor'."
-                )
-                return
-                
-            console.print(f"[bold green][OK][/bold green] Mapeamento de colunas bem-sucedido: {list(col_map.keys())}")
-            
-            # Processamento das linhas
-            row_num = 1
-            for row in reader:
-                row_num += 1
-                if not row or not any(cell.strip() for cell in row):
-                    continue  # Pula linhas vazias
-                    
-                # Preenche valores
-                try:
-                    category = row[col_map["category"]].strip()
-                    amount_raw = row[col_map["amount"]].strip()
-                    if not category or not amount_raw:
-                        console.print(f"[warning] Linha {row_num}: Ignorada por falta de categoria ou valor.[/warning]")
-                        continue
-                        
-                    amount = parse_amount(amount_raw)
-                    
-                    # Tipo
-                    r_type = "despesa"
-                    if "type" in col_map:
-                        type_val = normalize(row[col_map["type"]])
-                        if "receita" in type_val or "income" in type_val or "entrada" in type_val:
-                            r_type = "receita"
-                    else:
-                        # Fallback inteligente: se for valor negativo, assume despesa
-                        if amount < 0:
-                            r_type = "despesa"
-                            amount = abs(amount)
-                    
-                    # Descrição
-                    description = ""
-                    if "description" in col_map:
-                        description = row[col_map["description"]].strip()
-                        
-                    # Data de vencimento
-                    due_date = None
-                    if "due_date" in col_map:
-                        due_date = parse_due_date(row[col_map["due_date"]])
-                        
-                    items_to_import.append({
-                        "type": r_type,
-                        "category": category,
-                        "amount": amount,
-                        "description": description,
-                        "due_date": due_date
-                    })
-                except Exception as row_ex:
-                    console.print(f"[warning] Linha {row_num}: Erro ao processar dados ({row_ex}). Ignorada.[/warning]")
-                    
-        # 3. Faz a inserção em lote no BD
-        if not items_to_import:
-            console.print("[yellow][Aviso][/yellow] Nenhum lançamento válido foi encontrado no arquivo CSV para importação.")
-            return
-            
-        success = db.add_financial_records_bulk(items_to_import)
-        if success:
-            num_rec = sum(1 for x in items_to_import if x["type"] == "receita")
-            num_des = sum(1 for x in items_to_import if x["type"] == "despesa")
-            
-            console.print(
-                f"[bold green][SUCESSO][/bold green] Importação concluída!\n"
-                f"- Total de lançamentos importados: [yellow]{len(items_to_import)}[/yellow]\n"
-                f"- Receitas: {num_rec} | Despesas: {num_des}"
-            )
-            
-            # 4. Move o arquivo para pasta de arquivos importados (archive)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            archive_file = os.path.join(archive_dir, f"finance_imported_{timestamp}.csv")
-            try:
-                shutil.move(csv_file, archive_file)
-                console.print(f"[info] Arquivo CSV original movido para [cyan]uploads/archive/finance_imported_{timestamp}.csv[/cyan].[/info]")
-            except Exception as move_ex:
-                logging.warning("Não foi possível mover o arquivo importado para a pasta de arquivos arquivados: %s", move_ex)
-                console.print(f"[warning] Não foi possível mover o arquivo importado para a pasta de arquivos arquivados: {move_ex}[/warning]")
-        else:
-            logging.error("Falha ao registrar lançamentos de lote no banco de dados.")
-            console.print("[bold red][ERRO][/bold red] Falha ao registrar lançamentos de lote no banco de dados.")
-            
-    except Exception as e:
-        logging.exception("Falha crítica ao ler o arquivo CSV")
-        console.print(f"[bold red][ERRO][/bold red] Falha crítica ao ler o arquivo CSV: {e}")
-
-def handle_finance_card_command(parts: list, console: Console) -> None:
-    """Processa subcomandos relacionados a cartões de crédito."""
-    if len(parts) < 3:
-        console.print(
-            "[red]Uso correto dos comandos de cartão de crédito:\n"
-            "- [green]/finance card add <nome> <dia_fechamento> <dia_vencimento>[/green]\n"
-            "- [green]/finance card list[/green]\n"
-            "- [green]/finance card buy <cartao> <categoria> <valor_total> <parcelas> <descricao> [data_compra][/green][/red]"
-        )
-        return
-
-    subcmd = parts[2].lower()
-    
-    if subcmd == "add":
-        if len(parts) < 6:
-            console.print("[red]Uso correto: /finance card add <nome> <dia_fechamento> <dia_vencimento>[/red]")
-            return
-        name = parts[3].strip()
-        try:
-            closing_day = int(parts[4])
-            due_day = int(parts[5])
-            if not (1 <= closing_day <= 31) or not (1 <= due_day <= 31):
-                raise ValueError("Os dias devem estar entre 1 e 31.")
-        except ValueError as val_ex:
-            console.print(f"[red]Dias inválidos: {val_ex}. Forneça inteiros válidos de 1 a 31.[/red]")
-            return
-            
-        if db.save_credit_card(name, closing_day, due_day):
-            console.print(f"[bold green][SUCESSO][/bold green] Cartão '[yellow]{name}[/yellow]' cadastrado com sucesso! Fechamento: dia {closing_day} | Vencimento: dia {due_day}.")
-        else:
-            console.print("[red]Erro ao cadastrar cartão de crédito.[/red]")
-            
-    elif subcmd == "list":
-        cards = db.get_credit_cards().get("cartoes", {})
-        if not cards:
-            console.print("[yellow]Nenhum cartão de crédito cadastrado. Use [green]/finance card add[/green] para cadastrar.[/yellow]")
-            return
-            
-        table = Table(title="Cartões de Crédito Cadastrados")
-        table.add_column("Nome do Cartão", style="magenta")
-        table.add_column("Dia Fechamento", justify="center", style="cyan")
-        table.add_column("Dia Vencimento", justify="center", style="cyan")
-        
-        for name, info in cards.items():
-            table.add_row(name, str(info["closing_day"]), str(info["due_day"]))
-            
-        console.print(table)
-        
-    elif subcmd == "buy":
-        if len(parts) < 8:
-            console.print("[red]Uso correto: /finance card buy <cartao> <categoria> <valor_total> <parcelas> <descricao> [data_compra][/red]")
-            return
-            
-        card_name = parts[3].strip()
-        cards_config = db.get_credit_cards().get("cartoes", {})
-        
-        # Procura o cartão de forma case-insensitive
-        card_info = None
-        matched_card_name = ""
-        for name, info in cards_config.items():
-            if name.lower() == card_name.lower():
-                card_info = info
-                matched_card_name = name
-                break
-                
-        if not card_info:
-            console.print(f"[red]Cartão '{card_name}' não cadastrado! Use [green]/finance card list[/green] para ver os disponíveis.[/red]")
-            return
-            
-        category = parts[4].strip()
-        
-        try:
-            # Limpa valor total (ex: R$ 150,50 -> 150.50)
-            def parse_amount(val_str: str) -> float:
-                val_clean = val_str.replace("R$", "").replace(" ", "").strip()
-                if "," in val_clean:
-                    if "." in val_clean:
-                        val_clean = val_clean.replace(".", "").replace(",", ".")
-                    else:
-                        val_clean = val_clean.replace(",", ".")
-                return float(val_clean)
-                
-            total_amount = parse_amount(parts[5])
-            installments = int(parts[6])
-            if total_amount <= 0 or installments <= 0:
-                raise ValueError("Valor e parcelas devem ser maiores que zero.")
-        except ValueError as parse_ex:
-            console.print(f"[red]Erro de validação: {parse_ex}. Verifique o valor e parcelas.[/red]")
-            return
-            
-        # Pega descrição e data de compra opcional no final
-        remaining = parts[7:]
-        buy_date_str = None
-        from datetime import datetime
-        
-        if len(remaining) > 1:
-            possible_date = remaining[-1]
-            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-                try:
-                    datetime.strptime(possible_date, fmt)
-                    buy_date_str = possible_date
-                    remaining = remaining[:-1]
-                    break
-                except ValueError:
-                    continue
-                    
-        description = " ".join(remaining).strip()
-        if not description:
-            description = f"Compra no cartão {matched_card_name}"
-            
-        buy_date = datetime.now()
-        if buy_date_str:
-            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-                try:
-                    buy_date = datetime.strptime(buy_date_str, fmt)
-                    break
-                except ValueError:
-                    pass
-                    
-        closing_day = card_info["closing_day"]
-        due_day = card_info["due_day"]
-
-        # 1. Determina o mês e ano do fechamento da fatura (Closing Month/Year)
-        if buy_date.day >= closing_day:
-            if buy_date.month == 12:
-                closing_month = 1
-                closing_year = buy_date.year + 1
-            else:
-                closing_month = buy_date.month + 1
-                closing_year = buy_date.year
-        else:
-            closing_month = buy_date.month
-            closing_year = buy_date.year
-
-        # 2. Determina o vencimento da primeira parcela
-        if due_day <= closing_day:
-            if closing_month == 12:
-                first_due_month = 1
-                first_due_year = closing_year + 1
-            else:
-                first_due_month = closing_month + 1
-                first_due_year = closing_year
-        else:
-            first_due_month = closing_month
-            first_due_year = closing_year
-
-        base_inst_val = round(total_amount / installments, 2)
-        diff = round(total_amount - (base_inst_val * installments), 2)
-        
-        records_to_insert = []
-        
-        for i in range(1, installments + 1):
-            inst_amount = base_inst_val
-            if i == 1:
-                inst_amount = round(base_inst_val + diff, 2)
-                
-            offset_months = i - 1
-            due_month = first_due_month + offset_months
-            due_year = first_due_year
-            
-            while due_month > 12:
-                due_month -= 12
-                due_year += 1
-                
-            import calendar
-            max_days = calendar.monthrange(due_year, due_month)[1]
-            adjusted_due_day = min(due_day, max_days)
-            
-            due_date = datetime(due_year, due_month, adjusted_due_day).date()
-            inst_desc = f"[{matched_card_name} {i}/{installments}] {description}"
-            
-            records_to_insert.append({
-                "type": "despesa",
-                "category": category,
-                "amount": inst_amount,
-                "description": inst_desc,
-                "due_date": due_date.strftime("%Y-%m-%d")
-            })
-            
-        success = db.add_financial_records_bulk(records_to_insert)
-        if success:
-            console.print(
-                f"[bold green][SUCESSO][/bold green] Lançamento de cartão registrado!\n"
-                f"- Cartão: [yellow]{matched_card_name}[/yellow] | Total: [green]R$ {total_amount:.2f}[/green]\n"
-                f"- Parcelamento: [cyan]{installments}x[/cyan]\n"
-                f"- Vencimento inicial: [white]{records_to_insert[0]['due_date']}[/white]"
-            )
-        else:
-            console.print("[red]Erro ao salvar lançamentos parcelados no banco de dados.[/red]")
-            
-    else:
-        console.print(f"[red]Subcomando de cartão inválido: '{subcmd}'. Opções: add, list, buy.[/red]")
 
 def handle_agent_command(parts: list, console: Console):
     """Gerencia o comando /agent e seus subcomandos (list, use, info, create, improve, delete)."""
@@ -886,7 +489,6 @@ def handle_slash_command(cmd_input: str) -> bool:
             "- [green]/safe[/green]: Ativa o Modo Seguro (execução apenas de comandos permitidos).\n"
             "- [green]/unsafe[/green]: Desativa o Modo Seguro (requer senha de segurança).\n"
             "- [green]/notes[/green]: Gerencia notas (lista tudo).\n"
-            "- [green]/finance[/green]: Mostra finanças do mês atual. Filtros: [green]/finance web[/green] (dashboard Gradio), [green]/finance next[/green], [green]/finance deleted[/green], [green]/finance restore <ID>[/green], [green]/finance all[/green], [green]/finance mes=MM-YYYY[/green], [green]/finance q=busca[/green], [green]/finance delete <ID>[/green], [green]/finance import[/green], [green]/finance card[/green] (cartão de crédito).\n"
             "- [green]/cron[/green]: Gerencia cronjobs (lista tudo). Use [green]/cron add <nome> <cron_expr> <prompt>[/green] para agendar.\n"
             "- [green]/backup[/green]: Cria uma cópia de segurança criptografada com senha do banco de dados.\n"
             "- [green]/restore [caminho][/green]: Restaura um backup criptografado (permite escolher de uma lista se o caminho for omitido).\n"
@@ -1171,196 +773,6 @@ def handle_slash_command(cmd_input: str) -> bool:
         console.print(table)
         console.print("[dim]Use o chat normal para perguntar sobre suas notas ou pesquisar por elas.[/dim]")
         
-    elif command == "/finance":
-        # Permite abrir/visualizar link do dashboard web Gradio: /finance web ou /finance dashboard
-        if len(parts) > 1 and parts[1].lower() in ["web", "dashboard", "gradio"]:
-            console.print(Panel(
-                "[bold green]🌐 Dashboard Financeiro Gradio[/bold green]\n\n"
-                "Acesse em seu navegador pelo link:\n"
-                "[bold cyan]👉 http://localhost:7860[/bold cyan]\n\n"
-                "[dim]Se o serviço ainda não estiver rodando no Docker, inicialize com:\n"
-                "docker compose up -d dashboard[/dim]",
-                title="Painel Web Gradio",
-                border_style="green"
-            ))
-            return True
-
-        # Permite gerenciamento de cartões de crédito: /finance card
-        if len(parts) > 1 and parts[1].lower() in ["card", "cartao"]:
-            handle_finance_card_command(parts, console)
-            return True
-
-        # Permite importação via arquivo CSV: /finance import ou /finance csv
-        if len(parts) > 1 and parts[1].lower() in ["import", "csv"]:
-            handle_finance_csv_import(console)
-            return True
-
-        # Permite deleção via comando: /finance delete <id>
-        if len(parts) > 1 and parts[1].lower() in ["delete", "remove", "del", "rm"]:
-            if len(parts) < 3 or not parts[2].isdigit():
-                console.print("[red]Uso correto: /finance delete <ID>[/red]")
-                return True
-            rid = int(parts[2])
-            if db.delete_financial_record(rid):
-                console.print(f"[bold green]Lançamento #{rid} inativado com sucesso![/bold green]")
-            else:
-                console.print(f"[bold red]Falha ao inativar lançamento #{rid}. Verifique se o ID existe.[/bold red]")
-            return True
-            
-        # Permite restauração via comando: /finance restore <id>
-        if len(parts) > 1 and parts[1].lower() in ["restore", "reactivate", "undel"]:
-            if len(parts) < 3 or not parts[2].isdigit():
-                console.print("[red]Uso correto: /finance restore <ID>[/red]")
-                return True
-            rid = int(parts[2])
-            if db.restore_financial_record(rid):
-                console.print(f"[bold green]Lançamento #{rid} restaurado e ativo novamente![/bold green]")
-            else:
-                console.print(f"[bold red]Falha ao restaurar lançamento #{rid}. Verifique se o ID existe.[/bold red]")
-            return True
-            
-        # Permite gerar projeção anual de gastos fixos: /finance project [ano]
-        if len(parts) > 1 and parts[1].lower() in ["project", "projetar", "previsao"]:
-            from datetime import datetime
-            target_year = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else datetime.now().year
-            res = db.project_annual_fixed_expenses(year=target_year, start_month=1)
-            gerados = res.get("gerados", 0)
-            tot_val = res.get("total_valor", 0.0)
-            meses = res.get("meses_afetados", [])
-            if gerados > 0:
-                meses_str = ", ".join(str(m) for m in meses)
-                console.print(f"[bold green]🔮 Previsão Anual de Gastos Fixos Gerada com Sucesso![/bold green]")
-                console.print(f"- Ano: [cyan]{target_year}[/cyan] (Meses afetados: [yellow]{meses_str}[/yellow])")
-                console.print(f"- Total de lançamentos criados: [bold green]{gerados}[/bold green]")
-                console.print(f"- Valor total projetado: [bold green]R$ {tot_val:.2f}[/bold green]")
-            else:
-                console.print(f"[yellow]ℹ️ Todas as contas fixas do ano {target_year} já estão projetadas e em dia (nenhuma duplicação gerada).[/yellow]")
-            return True
-            
-        # Filtros e visualização
-        from datetime import datetime
-        now = datetime.now()
-        current_month_str = now.strftime("%m-%Y")
-        
-        # Calcula o próximo mês
-        if now.month == 12:
-            next_month = 1
-            next_year = now.year + 1
-        else:
-            next_month = now.month + 1
-            next_year = now.year
-        next_month_str = f"{next_month:02d}-{next_year}"
-        
-        limit = None
-        month_year = None
-        query = None
-        due_date = None
-        start_due_date = None
-        end_due_date = None
-        table_title = ""
-        show_deleted = False
-        
-        # Se não houver filtros, assume o mês atual
-        if len(parts) == 1:
-            month_year = current_month_str
-            table_title = f"Transações do Mês Atual ({current_month_str})"
-        else:
-            arg = parts[1]
-            if arg.lower() == "all":
-                table_title = "Todas as Transações"
-            elif arg.lower() == "next":
-                month_year = next_month_str
-                table_title = f"Transações do Próximo Mês ({next_month_str})"
-            elif arg.lower() == "deleted":
-                show_deleted = True
-                table_title = "Transações Inativas (Deletadas Logicamente)"
-            elif arg.lower().startswith("mes="):
-                month_year = arg.split("=")[1]
-                table_title = f"Transações com Vencimento em {month_year}"
-            elif arg.lower().startswith("venc="):
-                val = arg.split("=")[1]
-                if ":" in val:
-                    parts_d = val.split(":", 1)
-                    start_due_date = parts_d[0].strip()
-                    end_due_date = parts_d[1].strip()
-                    table_title = f"Transações com Vencimento entre {start_due_date} e {end_due_date}"
-                else:
-                    due_date = val.strip()
-                    table_title = f"Transações com Vencimento em {due_date}"
-            elif arg.lower().startswith("q="):
-                query = arg.split("=")[1]
-                table_title = f"Busca de Transações por '{query}'"
-            else:
-                console.print("[red]Filtro inválido. Use /finance, /finance next, /finance deleted, /finance restore <ID>, /finance all, /finance mes=MM-YYYY, /finance venc=YYYY-MM-DD[:YYYY-MM-DD] ou /finance q=busca[/red]")
-                return True
-                
-        if show_deleted:
-            records = db.get_deleted_financial_records()
-        else:
-            records = db.search_financial_records(
-                limit=limit, 
-                month_year=month_year, 
-                query=query, 
-                due_date=due_date, 
-                start_due_date=start_due_date, 
-                end_due_date=end_due_date
-            )
-        
-        # Calcula somatório dinâmico com base apenas nos registros filtrados/exibidos
-        sum_receitas = 0.0
-        sum_despesas = 0.0
-        for _, rtype, _, val, _, _, _ in records:
-            if rtype == "receita":
-                sum_receitas += val
-            elif rtype == "despesa":
-                sum_despesas += val
-        sum_saldo = sum_receitas - sum_despesas
-        
-        # Se for consulta com mês especificado ou padrão, exibe o painel de orçamento e teto diário
-        if month_year:
-            budget = db.get_daily_budget_summary(month_year)
-            status_style = "bold green" if budget["status_hoje"] == "ok" else "bold red"
-            status_text = "Dentro da meta diária!" if budget["status_hoje"] == "ok" else "Atenção: ultrapassou o teto diário!"
-            console.print(Panel(
-                f"[bold green]Receitas:[/bold green] R$ {budget['receitas_mes']:.2f}  |  "
-                f"[bold red]Custos Fixos & Faturas:[/bold red] R$ {budget['custos_fixos_mes']:.2f}  |  "
-                f"[bold yellow]Gastos Diários:[/bold yellow] R$ {budget['gastos_diarios_mes']:.2f}\n"
-                f"[bold cyan]Saldo Livre Restante:[/bold cyan] R$ {budget['saldo_livre_restante']:.2f}  |  "
-                f"[bold magenta]Teto Diário Recomendado:[/bold magenta] R$ {budget['teto_diario']:.2f}/dia (restam {budget['dias_restantes']} dias)\n"
-                f"[{status_style}]Gasto Hoje: R$ {budget['gasto_hoje']:.2f} ({status_text})[/{status_style}]",
-                title=f"🎯 Orçamento & Teto Diário ({month_year})",
-                expand=False
-            ))
-        else:
-            # Mostra o resumo geral dos dados filtrados
-            console.print(Panel(
-                f"[bold green]Receitas:[/bold green] R$ {sum_receitas:.2f}  |  "
-                f"[bold red]Despesas:[/bold red] R$ {sum_despesas:.2f}  |  "
-                f"[bold cyan]Saldo do Filtro:[/bold cyan] R$ {sum_saldo:.2f}",
-                title="Resumo Financeiro (Filtrado)",
-                expand=False
-            ))
-        
-        if records:
-            table = Table(title=table_title)
-            table.add_column("ID", justify="center", style="cyan")
-            table.add_column("Lançamento", style="blue")
-            table.add_column("Vencimento", style="yellow")
-            table.add_column("Tipo", style="magenta")
-            table.add_column("Categoria", style="yellow")
-            table.add_column("Valor", justify="right", style="green")
-            table.add_column("Descrição", style="white")
-            
-            for rid, rtype, cat, val, desc, dt, due_dt in records:
-                type_style = "[bold green]Receita[/bold green]" if rtype == "receita" else "[bold red]Despesa[/bold red]"
-                val_str = f"R$ {val:.2f}"
-                due_str = due_dt.strftime("%d/%m/%Y") if due_dt else "N/A"
-                table.add_row(str(rid), dt.strftime("%d/%m/%Y"), due_str, type_style, cat, val_str, desc or "")
-                
-            console.print(table)
-        else:
-            console.print("[yellow]Nenhuma transação encontrada com os filtros especificados.[/yellow]")
-            
     elif command == "/cron":
         # Verifica se é uma adição
         if len(parts) > 1 and parts[1].lower() == "add":

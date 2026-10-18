@@ -30,204 +30,17 @@ if not token:
 bot = telebot.TeleBot(token)
 
 pending_transcriptions = {}  # {chat_id: {"text": str, "audio_path": str}}
-pending_finance_entries = {}  # {chat_id: {"type": str, "category": str, "amount": float, "description": str, "due_date": str}}
 user_states = {}  # {chat_id: str}
-
-def format_finance_card_preview(data: dict, doc_type: str = "Voz", original_text: str = "") -> str:
-    """Formata os dados financeiros extraídos em um card visual para confirmação do usuário."""
-    r_type = data.get("type", "despesa").capitalize()
-    icon = "🔴" if r_type.lower() == "despesa" else "🟢"
-    amount = float(data.get("amount", 0.0))
-    category = data.get("category", "Outros")
-    desc = data.get("description", "Sem descrição")
-    due_date = data.get("due_date", datetime.now().strftime("%Y-%m-%d"))
-    card_name = data.get("card_name")
-    installments = int(data.get("installments", 1) or 1)
-    
-    try:
-        due_display = datetime.strptime(due_date, "%Y-%m-%d").strftime("%d/%m/%Y")
-    except Exception:
-        due_display = due_date
-        
-    lines = [
-        f"💰 *Lançamento Financeiro Identificado ({doc_type}):*\n",
-        f"• *Tipo:* {icon} {r_type}",
-        f"• *Categoria:* {category}",
-        f"• *Valor:* `R$ {amount:.2f}`",
-    ]
-    if card_name:
-        card_str = f"💳 {card_name} ({installments}x)" if installments > 1 else f"💳 {card_name} (à vista)"
-        lines.append(f"• *Cartão:* {card_str}")
-        
-    lines.extend([
-        f"• *Descrição:* {desc}",
-        f"• *Data/Vencimento:* {due_display}\n"
-    ])
-    if original_text:
-        text_escaped = escape_markdown(original_text[:120])
-        lines.append(f"_\"{text_escaped}\"_\n")
-        
-    lines.append("Deseja confirmar e registrar este lançamento?")
-    return "\n".join(lines)
-
-def sanitize_financial_due_date(raw_due_date: Optional[str]) -> str:
-    """
-    Garante que due_date esteja no formato YYYY-MM-DD e corrige eventuais inversões
-    de dia/mês provocadas por LLMs em textos ou comprovantes brasileiros.
-    """
-    now = datetime.now()
-    today_iso = now.strftime("%Y-%m-%d")
-    if not raw_due_date:
-        return today_iso
-        
-    cleaned = db.parse_date_str(str(raw_due_date).strip())
-    if not cleaned:
-        return today_iso
-        
-    try:
-        dt = datetime.strptime(cleaned, "%Y-%m-%d")
-        # Inversão exata em relação à data de hoje (ex: 2026-02-09 quando hoje é 2026-09-02)
-        if dt.year == now.year and dt.month == now.day and dt.day == now.month:
-            return today_iso
-            
-        # Inversão de dia/mês quando o mês resultante caiu no passado do mesmo ano e o dia <= 12
-        if dt.year == now.year and dt.month < now.month and dt.day <= 12 and dt.month <= 12:
-            inverted_dt = datetime(dt.year, dt.day, dt.month)
-            if inverted_dt.month == now.month:
-                return inverted_dt.strftime("%Y-%m-%d")
-    except Exception:
-        pass
-        
-    return cleaned
-
-def parse_financial_intent(text: str) -> dict:
-    """Analisa se o texto descreve uma transação financeira e extrai seus campos estruturados."""
-    keywords = [
-        "gastei", "gasto", "gostei", "comprei", "compra", "compras", "paguei", "pago", "pagamento",
-        "recebi", "recebimento", "salario", "salário", "pix", "fatura", "boleto", "cartão",
-        "cartao", "reais", "r$", "custou", "despesa", "receita", "lançar", "lancar", "registre", "registrar"
-    ]
-    text_lower = text.lower()
-    has_keywords = any(w in text_lower for w in keywords)
-    has_number = bool(re.search(r'\d+', text))
-    if not (has_keywords and has_number):
-        return None
-
-    # Evita interceptar simples perguntas e consultas (ex: "quanto gastei?", "ver extrato")
-    query_words = ["quanto", "qual", "quais", "ver ", "mostrar", "extrato", "resumo", "total", "saldo", "listar", "relatorio", "relatório"]
-    action_words = ["lançar", "lancar", "registre", "registrar", "anote", "anotar", "adicione", "adicionar", "salvar", "salve", "insere", "inserir"]
-    if any(qw in text_lower for qw in query_words) and not any(aw in text_lower for aw in action_words):
-        return None
-        
-    today_iso = datetime.now().strftime("%Y-%m-%d")
-    try:
-        from meu_agente_cli import llm
-        model = db.get_setting("active_model", "google/gemma-4-31b-qat")
-        prompt = (
-            "Você é um classificador e extrator financeiro rigoroso.\n"
-            "Analise a seguinte fala/transcrição/mensagem:\n"
-            f"\"{text}\"\n\n"
-            "Se o texto descrever uma transação financeira (despesa, compra ou receita realizada ou futura), responda ESTRITAMENTE com o seguinte JSON:\n"
-            "{\n"
-            '  "is_financial": true,\n'
-            '  "type": "despesa" ou "receita",\n'
-            '  "category": "Alimentação | Supermercado | Transporte | Farmácia | Saúde | Moradia | Lazer | Educação | Salário | Outros",\n'
-            '  "amount": 0.00,\n'
-            '  "description": "descrição curta do gasto/receita",\n'
-            f'  "due_date": "{today_iso}", // Data informada ou hoje\n'
-            '  "card_name": "Nome do cartão mencionado (ex: BB, Nubank, Itaú, Porto-Seguro) ou null",\n'
-            '  "installments": 1 // Número de parcelas se informado ou 1\n'
-            "}\n\n"
-            "IMPORTANTE: No Brasil as datas são DD/MM/AAAA. Se o usuário disser 'dia 02/09' ou '2 de setembro', o formato ISO YYYY-MM-DD é 2026-09-02.\n\n"
-            "Se NÃO for um lançamento de transação financeira (ex: consulta de extrato, pergunta, ata de reunião, conversa cotidiana), responda:\n"
-            '{"is_financial": false}\n\n'
-            "Responda SOMENTE o bloco JSON, sem markdown ou explicações."
-        )
-        messages = [{"role": "user", "content": prompt}]
-        res = llm.chat_completion(model, messages, stream=False)
-        match = re.search(r'\{.*\}', res, re.DOTALL)
-        if match:
-            data = json.loads(match.group(0))
-            if data.get("is_financial") and float(data.get("amount", 0)) > 0:
-                r_type = str(data.get("type", "despesa")).strip().lower()
-                data["type"] = "receita" if "receita" in r_type else "despesa"
-                data["amount"] = float(data.get("amount", 0))
-                data["due_date"] = sanitize_financial_due_date(data.get("due_date"))
-                card_val = data.get("card_name")
-                if card_val and str(card_val).lower() not in ("null", "none", ""):
-                    data["card_name"] = str(card_val).strip()
-                else:
-                    data["card_name"] = None
-                try:
-                    data["installments"] = max(1, int(data.get("installments", 1) or 1))
-                except Exception:
-                    data["installments"] = 1
-                return data
-    except Exception as e:
-        print(f"[Warning] Falha ao extrair intenção financeira via LLM: {e}")
-        
-    # Heurística fallback simples caso a LLM não responda ou retorne formato inválido
-    try:
-        val_match = re.search(r'(?:r\$|\$)?\s*(\d+(?:[.,]\d{1,2})?)\s*(?:reais)?', text_lower)
-        if val_match:
-            raw_val = val_match.group(1).replace(",", ".")
-            amount = float(raw_val)
-            if amount > 0:
-                r_type = "receita" if any(w in text_lower for w in ["recebi", "receita", "salario", "salário", "ganhei"]) else "despesa"
-                category = "Outros"
-                if any(w in text_lower for w in ["almoço", "almoco", "jantar", "lanche", "restaurante", "pizza", "comida", "padaria", "doce", "doces", "sorvete", "sorvetes"]):
-                    category = "Alimentação"
-                elif any(w in text_lower for w in ["mercado", "supermercado", "compras"]):
-                    category = "Supermercado"
-                elif any(w in text_lower for w in ["uber", "taxi", "gasolina", "combustivel", "combustível", "onibus", "ônibus"]):
-                    category = "Transporte"
-                elif any(w in text_lower for w in ["remedio", "remédio", "farmacia", "farmácia", "medico", "médico"]):
-                    category = "Farmácia"
-                elif any(w in text_lower for w in ["aluguel", "condominio", "condomínio", "luz", "energia", "agua", "água", "internet", "domínio", "dominio"]):
-                    category = "Moradia"
-                    
-                # Detecção de cartão na heurística fallback
-                cards_dict = {
-                    "bb": "BB", "banco do brasil": "BB", 
-                    "nubank": "Nubank", "nu": "Nubank", 
-                    "itau": "Itaú", "itaú": "Itaú", 
-                    "porto": "Porto-Seguro", "porto seguro": "Porto-Seguro", 
-                    "bradesco": "Bradesco", "inter": "Inter"
-                }
-                detected_card = None
-                if "cartão" in text_lower or "cartao" in text_lower or "credito" in text_lower or "crédito" in text_lower:
-                    for c_key, c_val in cards_dict.items():
-                        if c_key in text_lower:
-                            detected_card = c_val
-                            break
-                inst_match = re.search(r'(\d+)\s*(?:x|vezes|parcelas)', text_lower)
-                installments = int(inst_match.group(1)) if inst_match else 1
-
-                return {
-                    "is_financial": True,
-                    "type": r_type,
-                    "category": category,
-                    "amount": amount,
-                    "description": text[:80],
-                    "due_date": today_iso,
-                    "card_name": detected_card,
-                    "installments": installments
-                }
-    except Exception:
-        pass
-        
-    return None
 
 TELEGRAM_INSTRUCTION = (
     "\n\n[INSTRUÇÃO DO SISTEMA: Você está respondendo via Telegram. Se for responder diretamente "
     "ao usuário em texto, formate com listas limpas, quebras de linhas duplas e emojis, sem tabelas ASCII "
-    "ou caixas unicode complexas. Se você precisar acionar uma ferramenta (como google_calendar_tool, gmail_tool, mcp_crm_list_tasks, mcp_crm_list_clients, tts_tool, finance_tool, etc.), "
+    "ou caixas unicode complexas. Se você precisar acionar uma ferramenta (como google_calendar_tool, gmail_tool, mcp_crm_list_tasks, mcp_crm_list_clients, tts_tool, etc.), "
     "responda EXCLUSIVAMENTE com o bloco JSON da ferramenta, sem texto adicional de conversa. "
     "NUNCA invente, presuma ou responda sobre compromissos ou eventos da agenda sem antes ter acionado o JSON da google_calendar_tool e analisado os dados reais retornados! "
     "NUNCA invente, presuma ou responda sobre e-mails sem antes ter acionado o JSON da gmail_tool! "
     "NUNCA invente, presuma ou liste tarefas, clientes ou dados do CRM em texto sem antes ter acionado a respectiva ferramenta MCP (ex: mcp_crm_list_tasks)! "
     "NUNCA simule em texto mensagens que afirmam que um áudio foi gerado sem ter acionado o JSON da tts_tool! "
-    "NUNCA simule ou responda em texto que uma despesa, receita ou compra em cartão foi gravada/registrada sem ter acionado o JSON da finance_tool e recebido o retorno [SUCCESS]!]"
 )
 
 
@@ -309,128 +122,6 @@ def format_cron_telegram() -> str:
         )
         
     return "\n\n".join(linhas)
-
-def format_finance_card_list() -> str:
-    cards = db.get_credit_cards().get("cartoes", {})
-    if not cards:
-        return "💳 *Cartões de Crédito*\n\nNenhum cartão cadastrado. Use `/finance card add` no console ou no bot."
-        
-    linhas = ["💳 *Cartões de Crédito Cadastrados:*\n"]
-    for name, info in cards.items():
-        linhas.append(f"• *{name}* - Fechamento: dia `{info['closing_day']}` | Vencimento: dia `{info['due_day']}`")
-        
-    return "\n".join(linhas)
-
-def format_finance_telegram(parts: list) -> str:
-    from datetime import datetime
-    now = datetime.now()
-    current_month_str = now.strftime("%m-%Y")
-    
-    if now.month == 12:
-        next_month = 1
-        next_year = now.year + 1
-    else:
-        next_month = now.month + 1
-        next_year = now.year
-    next_month_str = f"{next_month:02d}-{next_year}"
-    
-    limit = None
-    month_year = None
-    query = None
-    due_date = None
-    start_due_date = None
-    end_due_date = None
-    table_title = ""
-    show_deleted = False
-    
-    if len(parts) == 1:
-        month_year = current_month_str
-        table_title = f"Mês Atual ({current_month_str})"
-    else:
-        arg = parts[1]
-        if arg.lower() == "all":
-            table_title = "Todas as Transações"
-        elif arg.lower() == "next":
-            month_year = next_month_str
-            table_title = f"Próximo Mês ({next_month_str})"
-        elif arg.lower() == "deleted":
-            show_deleted = True
-            table_title = "Transações Inativas"
-        elif arg.lower().startswith("mes="):
-            month_year = arg.split("=")[1]
-            table_title = f"Vencimento em {month_year}"
-        elif arg.lower().startswith("venc="):
-            val = arg.split("=")[1]
-            if ":" in val:
-                parts_d = val.split(":", 1)
-                start_due_date = parts_d[0].strip()
-                end_due_date = parts_d[1].strip()
-                table_title = f"Vencimento entre {start_due_date} e {end_due_date}"
-            else:
-                due_date = val.strip()
-                table_title = f"Vencimento em {due_date}"
-        elif arg.lower().startswith("q="):
-            query = arg.split("=")[1]
-            table_title = f"Busca por '{query}'"
-        else:
-            return (
-                "❌ *Filtro inválido.*\nUse:\n"
-                "• `/finance` (mês atual)\n"
-                "• `/finance next` (próximo mês)\n"
-                "• `/finance all` (tudo)\n"
-                "• `/finance deleted` (excluídos)\n"
-                "• `/finance mes=MM-YYYY` (mês específico)\n"
-                "• `/finance venc=YYYY-MM-DD` (data específica)\n"
-                "• `/finance venc=YYYY-MM-DD:YYYY-MM-DD` (intervalo de datas)\n"
-                "• `/finance q=busca` (pesquisar)"
-            )
-            
-    if show_deleted:
-        records = db.get_deleted_financial_records()
-    else:
-        records = db.search_financial_records(
-            limit=limit, 
-            month_year=month_year, 
-            query=query,
-            due_date=due_date,
-            start_due_date=start_due_date,
-            end_due_date=end_due_date
-        )
-        
-    if not records:
-        return f"🔍 *{table_title}*\n\nNenhuma transação encontrada com os filtros especificados."
-        
-    sum_receitas = 0.0
-    sum_despesas = 0.0
-    for _, rtype, _, val, _, _, _ in records:
-        if rtype == "receita":
-            sum_receitas += val
-        elif rtype == "despesa":
-            sum_despesas += val
-    sum_saldo = sum_receitas - sum_despesas
-    
-    resumo = (
-        f"📊 *Resumo Financeiro - {table_title}*\n"
-        f"🟢 Receitas: `R$ {sum_receitas:.2f}`\n"
-        f"🔴 Despesas: `R$ {sum_despesas:.2f}`\n"
-        f"⚖️ Saldo: `R$ {sum_saldo:.2f}`\n"
-        f"─────────────────────\n"
-    )
-    
-    linhas = []
-    for rid, rtype, cat, val, desc, dt, due_dt in records:
-        emoji = "🟢" if rtype == "receita" else "🔴"
-        dt_str = dt.strftime("%d/%m/%Y")
-        due_str = due_dt.strftime("%d/%m/%Y") if due_dt else "N/A"
-        desc_str = f" - _{desc}_" if desc else ""
-        
-        linha = (
-            f"• *#{rid}* ({dt_str}) | {emoji} {cat}\n"
-            f"  *Valor:* `R$ {val:.2f}` | *Venc:* `{due_str}`{desc_str}"
-        )
-        linhas.append(linha)
-        
-    return resumo + "\n\n".join(linhas)
 
 def format_markdown_for_telegram(text: str) -> str:
     """
@@ -539,21 +230,7 @@ def handle_incoming_message(message):
             elif cmd == "/agent":
                 handle_agent_command_telegram(message, parts)
                 return
-            elif cmd == "/finance":
-                # Verifica se é uma listagem/filtro normal ou uma ação (delete, restore, import, card add/buy)
-                is_list = True
-                if len(parts) > 1:
-                    sub = parts[1].lower()
-                    if sub in ["delete", "restore", "import", "csv"] or (sub in ["card", "cartao"] and len(parts) > 2 and parts[2].lower() in ["add", "buy"]):
-                        is_list = False
-                        
-                if is_list:
-                    # Verifica se é listagem de cartões de crédito
-                    if len(parts) > 1 and parts[1].lower() in ["card", "cartao"] and (len(parts) == 2 or parts[2].lower() == "list"):
-                        bot.reply_to(message, format_finance_card_list(), parse_mode="Markdown")
-                    else:
-                        bot.reply_to(message, format_finance_telegram(parts), parse_mode="Markdown")
-                    return
+
             
             # Caso contrário, cai no fallback de capturar o console Rich do terminal
             from meu_agente_cli.main import console
@@ -584,18 +261,6 @@ def handle_incoming_message(message):
         # Conversa normal com o Agente (Pensamento + Execução Silenciosa de Ferramentas)
         bot.send_chat_action(message.chat.id, 'typing')
         
-        # Interceptação proativa de lançamentos financeiros em mensagens de texto
-        fin_data = parse_financial_intent(text)
-        if fin_data:
-            pending_finance_entries[message.chat.id] = fin_data
-            markup = InlineKeyboardMarkup()
-            btn_confirm = InlineKeyboardButton("✅ Confirmar Lançamento", callback_data="finance_confirm:confirm")
-            btn_cancel = InlineKeyboardButton("❌ Cancelar", callback_data="finance_confirm:cancel")
-            markup.row(btn_confirm, btn_cancel)
-            
-            card_text = format_finance_card_preview(fin_data, doc_type="Texto", original_text=text)
-            bot.reply_to(message, card_text, reply_markup=markup, parse_mode="Markdown")
-            return
 
         try:
             telegram_prompt = f"{text}{TELEGRAM_INSTRUCTION}"
@@ -1301,11 +966,10 @@ def handle_audio_upload(message):
         markup = InlineKeyboardMarkup()
         btn_simple = InlineKeyboardButton("📝 Resumo Simples", callback_data="audio_action:simple")
         btn_detailed = InlineKeyboardButton("📌 Pontos & Plano de Ação", callback_data="audio_action:detailed")
-        btn_finance = InlineKeyboardButton("💰 Lançar no Financeiro", callback_data="audio_action:finance")
         btn_custom = InlineKeyboardButton("✍️ Outra Instrução...", callback_data="audio_action:custom")
         
         markup.row(btn_simple, btn_detailed)
-        markup.row(btn_finance, btn_custom)
+        markup.row(btn_custom)
         
         # Envia resposta
         transcription_escaped = escape_markdown(transcription)
@@ -1331,6 +995,95 @@ def handle_audio_upload(message):
     except Exception as e:
         print(f"[ERROR] Falha geral no recebimento e transcrição de áudio: {e}")
         bot.reply_to(message, f"❌ Ocorreu um erro no processamento do áudio: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("audio_action:"))
+def handle_audio_action(call):
+    chat_id = call.message.chat.id
+    action = call.data.split(":")[1]
+    
+    trans_data = pending_transcriptions.get(chat_id)
+    if not trans_data:
+        bot.answer_callback_query(call.id, "Nenhuma transcrição ativa encontrada.")
+        bot.send_message(chat_id, "⚠️ Desculpe, a transcrição expirou ou não foi encontrada. Envie o áudio novamente.")
+        return
+        
+    transcription = trans_data["text"]
+    audio_path = trans_data["audio_path"]
+    
+    bot.answer_callback_query(call.id)
+    
+    if action == "simple":
+        bot.send_message(chat_id, "📝 Gerando resumo simples...")
+        bot.send_chat_action(chat_id, 'typing')
+        try:
+            prompt = f"Faça um resumo simples e direto da seguinte transcrição de áudio:\\n\\n{transcription}{TELEGRAM_INSTRUCTION}"
+            response = agent.process_agent_turn_silent(prompt)
+            
+            db.save_audio_transcription(chat_id, audio_path, transcription, "Resumo Simples", response)
+            
+            bot.send_message(chat_id, response, parse_mode="Markdown")
+            pending_transcriptions.pop(chat_id, None)
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Erro ao gerar resumo: {e}")
+            
+    elif action == "detailed":
+        bot.send_message(chat_id, "📌 Gerando principais pontos e plano de ação...")
+        bot.send_chat_action(chat_id, 'typing')
+        try:
+            prompt = (
+                f"Analise a seguinte transcrição de áudio e forneça um resumo estruturado contendo "
+                f"os principais pontos discutidos e um plano de ação detalhado com os próximos passos:\n\n"
+                f"{transcription}{TELEGRAM_INSTRUCTION}"
+            )
+            response = agent.process_agent_turn_silent(prompt)
+            
+            db.save_audio_transcription(chat_id, audio_path, transcription, "Principais Pontos e Plano de Ação", response)
+            
+            bot.send_message(chat_id, response, parse_mode="Markdown")
+            pending_transcriptions.pop(chat_id, None)
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Erro ao gerar resumo: {e}")
+            
+    elif action == "custom":
+        user_states[chat_id] = "waiting_for_custom_instruction"
+        bot.send_message(chat_id, "✍️ Digite a instrução personalizada para processar o áudio (ex: 'traduza para inglês' ou 'extraia datas'):")
+
+    elif action == "meeting_menu":
+        markup = InlineKeyboardMarkup()
+        btn_simple = InlineKeyboardButton("📝 Resumo Simples", callback_data="audio_action:simple")
+        btn_detailed = InlineKeyboardButton("📌 Pontos & Plano de Ação", callback_data="audio_action:detailed")
+        btn_custom = InlineKeyboardButton("✍️ Outra Instrução...", callback_data="audio_action:custom")
+        markup.row(btn_simple, btn_detailed)
+        markup.row(btn_custom)
+        
+        transcription_escaped = escape_markdown(transcription)
+        msg_text = (
+            f"🎙️ *Menu de Reunião / Transcrição:*\n\n"
+            f"_\"{transcription_escaped}\"_\n\n"
+            f"Escolha o que deseja fazer com esta transcrição:"
+        )
+        try:
+            bot.edit_message_text(msg_text, chat_id=chat_id, message_id=call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        except Exception:
+            bot.send_message(chat_id, msg_text, reply_markup=markup, parse_mode="Markdown")
+
+    elif action == "finance":
+        bot.send_chat_action(chat_id, 'typing')
+        fin_data = parse_financial_intent(transcription)
+        if fin_data:
+            pending_finance_entries[chat_id] = fin_data
+            markup = InlineKeyboardMarkup()
+            btn_confirm = InlineKeyboardButton("✅ Confirmar Lançamento", callback_data="finance_confirm:confirm")
+            btn_cancel = InlineKeyboardButton("❌ Cancelar", callback_data="finance_confirm:cancel")
+            markup.row(btn_confirm, btn_cancel)
+            card_text = format_finance_card_preview(fin_data, doc_type="Voz", original_text=transcription)
+            bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
+        else:
+            bot.send_message(
+                chat_id,
+                "⚠️ Não foi possível identificar automaticamente valores ou categoria claros neste áudio.\n"
+                "Exemplo ideal de voz: *\"Gastei 45 reais no almoço\"* ou *\"Recebi 300 reais de comissão\"*."
+            )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("audio_action:"))
 def handle_audio_action(call):

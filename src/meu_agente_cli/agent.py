@@ -258,8 +258,6 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
             return tools.get_financial_quote(**args)
         elif tool_name == "get_news":
             return tools.get_news(**args)
-        elif tool_name == "finance_tool":
-            return tools.finance_tool(**args)
         elif tool_name == "notes_tool":
             return tools.notes_tool(**args)
         elif tool_name == "execute_cli_command":
@@ -275,8 +273,6 @@ def execute_tool_by_name(tool_name: str, args: dict, console: Console, allow_int
                     return f"Erro: O comando '{cmd}' não está na whitelist e a execução remota de comandos não-seguros foi bloqueada."
         elif tool_name == "calculator_tool":
             return tools.calculator_tool(**args)
-        elif tool_name == "invest_tool":
-            return tools.invest_tool(**args)
         elif tool_name == "profile_tool":
             return tools.profile_tool(**args)
         elif tool_name == "pdf_tool":

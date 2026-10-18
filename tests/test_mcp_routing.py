@@ -1,8 +1,29 @@
 import unittest
+from unittest import mock
 from rich.console import Console
 from meu_agente_cli import db, tools, agent, mcp_client
 
 class TestMCPRoutingAndFlowCRM(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        db.init_database()
+        db.save_mcp_server("FlowCRM", "http://localhost:8001/sse")
+        
+        # Mocks para não depender de servidor HTTP externo nos testes unitários
+        cls.patcher_tools = mock.patch("meu_agente_cli.mcp_client.fetch_server_tools", return_value=[
+            {"name": "get_dashboard", "description": "Dashboard geral do CRM", "input_schema": {}},
+            {"name": "list_tasks", "description": "Lista de tarefas", "input_schema": {}}
+        ])
+        cls.patcher_call = mock.patch("meu_agente_cli.mcp_client.call_mcp_tool", return_value='{"visao_geral_ano": 2026, "tarefas": []}')
+        cls.patcher_tools.start()
+        cls.patcher_call.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.patcher_tools.stop()
+        cls.patcher_call.stop()
+        db.delete_mcp_server("FlowCRM")
+
     def test_get_mcp_server_flexible_alias(self):
         """Testa se busca por FlowCRM, flow_crm e crm encontram o servidor cadastrado."""
         s1 = db.get_mcp_server("FlowCRM")
