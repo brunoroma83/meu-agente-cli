@@ -2,6 +2,7 @@ services:
   agent:
     build: .
     container_name: meu-agente-cli
+    command: uv run --no-dev meu-agente-cli
     environment:
       # Variáveis de conexão com o banco de dados (serviço do Docker)
       - DB_HOST=db
@@ -16,6 +17,7 @@ services:
       # Cloudflare Workers AI
       - CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-}
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+      - SECURITY_PASSWORD=${SECURITY_PASSWORD:-minhasenha_segura}
     volumes:
       # Persiste arquivos de configurações e banco de dados
       - agent_data:/root/.config/meu-agente-cli
@@ -34,7 +36,7 @@ services:
   telegram-bot:
     build: .
     container_name: meu-agente-telegram
-    command: uv run python3 -m meu_agente_cli.telegram_app
+    command: uv run --no-dev python3 -m meu_agente_cli.telegram_app
     environment:
       - DB_HOST=db
       - DB_PORT=5432
@@ -47,6 +49,7 @@ services:
       - TELEGRAM_AUTHORIZED_USER_IDS=${TELEGRAM_AUTHORIZED_USER_IDS}
       - CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-}
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+      - SECURITY_PASSWORD=${SECURITY_PASSWORD:-minhasenha_segura}
     volumes:
       - agent_data:/root/.config/meu-agente-cli
       - .:/app
@@ -70,6 +73,7 @@ services:
       - DB_NAME=meu_agente_db
       - DB_USER=postgres
       - DB_PASSWORD=postgres_seguro
+      - SECURITY_PASSWORD=${SECURITY_PASSWORD:-minhasenha_segura}
       - GRADIO_SERVER_NAME=0.0.0.0
       - GRADIO_SERVER_PORT=7860
       - PYTHONUNBUFFERED=1
@@ -94,7 +98,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d meu_agente_db"]
       interval: 5s

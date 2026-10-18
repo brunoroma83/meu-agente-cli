@@ -36,4 +36,4 @@ RUN uv sync --frozen --no-dev
 
 
 # Comando de entrada usando o executável do uv
-CMD ["uv", "run", "meu-agente-cli"]
+CMD ["uv", "run", "--no-dev", "meu-agente-cli"]

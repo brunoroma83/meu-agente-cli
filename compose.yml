@@ -31,7 +31,7 @@ services:
   telegram-bot:
     build: .
     container_name: meu-agente-telegram
-    command: uv run python3 -m meu_agente_cli.telegram_app
+    command: uv run --no-dev python3 -m meu_agente_cli.telegram_app
     environment:
       - DB_HOST=db
       - DB_PORT=5432

@@ -204,7 +204,7 @@ def build_app():
             # ABA 1: CHAT COM O AGENTE
             # -------------------------------------------------------------
             with gr.TabItem("💬 Chat com o Agente"):
-                chatbot = gr.Chatbot(height=520, type="messages", label="Conversa com o Agente")
+                chatbot = gr.Chatbot(height=520, label="Conversa com o Agente")
                 with gr.Row():
                     msg_input = gr.Textbox(
                         placeholder="Digite sua mensagem ou comando para o agente (ex: 'Quais ferramentas MCP estão ativas?', 'Qual a previsão do tempo?')...",
