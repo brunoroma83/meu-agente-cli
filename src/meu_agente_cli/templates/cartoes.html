@@ -171,11 +171,12 @@
                 <thead class="bg-slate-950 text-slate-400 uppercase tracking-wider text-[11px] border-b border-slate-800">
                     <tr>
                         <th class="py-3 px-4">Cartão</th>
-                        <th class="py-3 px-4">Vencimento</th>
+                        <th class="py-3 px-4">Data da Despesa</th>
                         <th class="py-3 px-4">Descrição / Parcela</th>
                         <th class="py-3 px-4">Categoria</th>
                         <th class="py-3 px-4">Titular</th>
                         <th class="py-3 px-4 text-right">Valor da Parcela</th>
+                        <th class="py-3 px-4 text-center">Ações</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-800/60 font-mono">
@@ -187,7 +188,7 @@
                             </span>
                         </td>
                         <td class="py-3 px-4 text-slate-300">
-                            {{ p.due_date.strftime('%d/%m/%Y') if p.due_date and p.due_date.strftime else (p.due_date or '-') }}
+                            {{ p.buy_date.strftime('%d/%m/%Y') if p.buy_date and p.buy_date.strftime else (p.buy_date or (p.due_date.strftime('%d/%m/%Y') if p.due_date and p.due_date.strftime else (p.due_date or '-'))) }}
                         </td>
                         <td class="py-3 px-4 font-sans font-medium text-slate-100">
                             {{ p.description }}
@@ -203,10 +204,22 @@
                         <td class="py-3 px-4 text-right font-bold text-white">
                             R$ {{ "%.2f"|format(p.amount) }}
                         </td>
+                        <td class="py-3 px-4 text-center">
+                            <form method="POST" action="/cartoes/delete/{{ p.id }}" class="inline"
+                                  onsubmit="return confirm('Deseja realmente apagar o lançamento \'{{ p.description }}\' no valor de R$ {{ '%.2f'|format(p.amount) }}?');">
+                                <input type="hidden" name="mes_ano" value="{{ mes_ano_input }}">
+                                <input type="hidden" name="cartao" value="{{ selected_card }}">
+                                <input type="hidden" name="user_name" value="{{ active_user_filter or '' }}">
+                                <button type="submit" title="Excluir lançamento"
+                                        class="text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 p-1.5 rounded transition text-xs">
+                                    🗑️
+                                </button>
+                            </form>
+                        </td>
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="6" class="py-8 text-center text-slate-500 font-sans">
+                        <td colspan="7" class="py-8 text-center text-slate-500 font-sans">
                             Nenhuma compra de cartão registrada para este período.
                         </td>
                     </tr>

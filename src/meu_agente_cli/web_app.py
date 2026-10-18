@@ -460,6 +460,36 @@ async def delete_card_action(card_id: int):
     param = "msg" if ok else "error"
     return RedirectResponse(url=f"/cartoes?{param}={urllib.parse.quote(msg)}", status_code=status.HTTP_303_SEE_OTHER)
 
+@app.post("/cartoes/delete/{record_id}")
+async def delete_compra_cartao_action(
+    request: Request,
+    record_id: int,
+    mes_ano: Optional[str] = Form(None),
+    cartao: Optional[str] = Form(None),
+    user_name: Optional[str] = Form(None)
+):
+    mes_ano = mes_ano or request.query_params.get("mes_ano")
+    cartao = cartao or request.query_params.get("cartao")
+    user_name = user_name or request.query_params.get("user_name")
+    
+    ok = db.delete_financial_record(record_id)
+    m, y, _ = parse_month_year(mes_ano)
+    
+    import urllib.parse
+    params = [f"mes_ano={y:04d}-{m:02d}"]
+    if cartao and cartao.strip():
+        params.append(f"cartao={urllib.parse.quote(cartao.strip())}")
+    if user_name and user_name.strip():
+        params.append(f"user_name={urllib.parse.quote(user_name.strip().lower())}")
+    
+    msg_param = "msg=" + urllib.parse.quote("Lançamento do cartão apagado com sucesso.") if ok else "error=" + urllib.parse.quote("Erro ao apagar lançamento do cartão.")
+    params.append(msg_param)
+    
+    return RedirectResponse(
+        url=f"/cartoes?{'&'.join(params)}",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
 
 # =====================================================================
 # RECEITAS

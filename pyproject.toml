@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-meu-financeiro = "meu_agente_cli.main:run_server"
+meu-financeiro = "meu_agente_cli.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]

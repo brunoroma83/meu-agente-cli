@@ -3,6 +3,7 @@ import sys
 import argparse
 import asyncio
 import logging
+from typing import Optional
 import uvicorn
 from rich.console import Console
 from rich.table import Table
@@ -12,8 +13,11 @@ import meu_agente_cli.db as db
 
 console = Console()
 
-def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False):
+def run_server(host: str = "0.0.0.0", port: int = 8000, reload: Optional[bool] = None):
     """Inicializa o banco de dados e inicia o servidor Web FastAPI + MCP Server."""
+    if reload is None:
+        reload = "--reload" in sys.argv
+
     console.print(Panel(
         f"[bold cyan]MEU FINANCEIRO - SERVIÇO & MCP SERVER[/bold cyan]\n"
         f"Interface Web Leve: [bold green]http://{host}:{port}/dashboard[/bold green]\n"
@@ -28,13 +32,21 @@ def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False):
     except Exception as e:
         console.print(f"[bold red]Aviso ao conectar/inicializar banco de dados: {e}[/bold red]")
 
+    uvicorn_kwargs = {
+        "host": host,
+        "port": port,
+        "reload": reload,
+        "proxy_headers": True,
+        "forwarded_allow_ips": "*"
+    }
+    if reload:
+        app_dir = "/app/src" if os.path.exists("/app/src") else ("/app" if os.path.exists("/app") else None)
+        if app_dir:
+            uvicorn_kwargs["reload_dirs"] = [app_dir]
+
     uvicorn.run(
         "meu_agente_cli.web_app:app",
-        host=host,
-        port=port,
-        reload=reload,
-        proxy_headers=True,
-        forwarded_allow_ips="*"
+        **uvicorn_kwargs
     )
 
 def main():
